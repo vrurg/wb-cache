@@ -1,0 +1,24 @@
+[package]
+    authors       = ["Vadim Belman"]
+    categories    = ["caching"]
+    documentation = "https://docs.rs/wb-cache"
+    edition       = "2021"
+    exclude       = ["Makefile.toml", "release.toml"]
+    keywords      = ["cache", "write-back", "async", "database"]
+    license-file  = "LICENSE"
+    name          = "wb-cache"
+    repository    = "https://github.com/vrurg/wb-cache.git"
+    version       = "0.1.0"
+
+[lib]
+    name = "wb_cache"
+    path = "src/lib.rs"
+
+[dependencies]
+    async-trait = "0.1"
+    fieldx      = { path = "../fieldx/fieldx", features = ["sync", "serde", "send_guard"] }
+    fieldx_plus = { version = "0.1.5", features = ["sync", "serde", "send_guard"] }
+    log         = "0.4"
+    moka        = { version = "0.12", features = ["future", "log"] }
+    thiserror   = "2.0"
+    tokio       = { version = "1.40", features = ["rt-multi-thread", "macros", "time"] }
