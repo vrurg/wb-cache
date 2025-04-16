@@ -7,6 +7,10 @@ use std::{
 // For types that are in charge of reading/writing records.
 #[async_trait]
 pub trait WBDataController: Sized + Send + Sync + 'static {
+    /// The key type to be used with methods like [`WBCache::get()`](crate::WBCache::get) or
+    /// [`WBCache::entry()`](crate::WBCache::entry).
+    ///
+    /// To implement multi-key access you can use an enum as the key type.
     type Key: Debug + Display + Hash + Clone + Eq + Sized + Send + Sync + 'static;
     type Value: Debug + Clone + Send + Sync + 'static;
     type CacheUpdate: Debug + Send + Sync + 'static;

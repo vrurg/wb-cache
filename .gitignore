@@ -1,2 +1,6 @@
 /target
 Cargo.lock
+__script.bin
+*.ipynb
+.vscode/launch.json
+.vscode/settings.json

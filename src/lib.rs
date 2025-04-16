@@ -12,7 +12,7 @@
 //! ## Vocabulary
 //!
 //! - **Data Controller (DC)**: The interface between the cache and the data source. A data controller implements the
-//!   [`WBDataController`](crate::traits::WBDataController) trait.
+//!   [`WBDataController`] trait.
 //!
 //! ## Basic Principles
 //!
@@ -40,8 +40,7 @@
 //!
 //! ## Architecture
 //!
-//! The central part of the cache is the [`WBCache`](crate::cache::WBCache) object. It serves as a front end to the
-//! actual `moka` instance.
+//! The central part of the cache is the [`WBCache`] object. It serves as a front end to the actual `moka` instance.
 //!
 //! The cache object holds an instance of a data controller that must be manually created, configured by the user,
 //! and submitted to the cache builder. Typically, the controller is tailored to the specific kind of record.
@@ -64,11 +63,16 @@
 pub mod cache;
 pub mod entry;
 pub mod entry_selector;
+#[cfg(any(test, feature = "test"))]
+pub mod test;
 pub mod traits;
 pub mod types;
 pub(crate) mod update_state;
 
+#[doc(inline)]
 pub use cache::WBCache;
+#[doc(inline)]
+pub use traits::WBDataController;
 
 pub mod prelude {
     pub use crate::{cache::WBCache, entry::WBEntry, traits::WBDataController, types::*};

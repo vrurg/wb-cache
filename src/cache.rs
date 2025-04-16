@@ -14,14 +14,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Keys of Pending and Secondary must always be the primary key.
+// The key `K` for a secondary entry must always match the primary key,
+// as it uniquely identifies the corresponding primary value in the cache.
 #[derive(Clone, Debug)]
 pub(crate) enum ValueState<K, V>
 where
     K: Debug + Hash + Clone + Eq + Sized + Send + Sync + 'static,
     V: Debug + Clone + Send + Sync + 'static,
 {
-    // Only the primaries can be finalized
     Primary(V),
     Secondary(K),
 }
@@ -41,7 +41,7 @@ where
 
 /// This is where all the magic happens!
 ///
-/// ```ignote
+/// ```ignore
 /// let controller = MyDataController::new(host, port);
 /// let cache = WBCache::builder()
 ///     .data_controller(controller)
@@ -64,14 +64,23 @@ where
 ///     })
 ///     .await?;
 /// ```
-#[fx_plus(parent, no_new, default(off), sync, builder())]
+#[fx_plus(
+    parent,
+    no_new,
+    default(off),
+    sync,
+    builder(
+        doc("Builder object of [`WBCache`].", "", "See [`WBCache::builder()`] method."),
+        method_doc("Implement builder pattern for [`WBCache`]."),
+    )
+)]
 pub struct WBCache<DC>
 where
     DC: WBDataController,
     DC::Key: Send + Sync + 'static,
     DC::Error: Send + Sync + 'static,
 {
-    #[fieldx(vis(pub(crate)), builder(required, into), get(clone))]
+    #[fieldx(vis(pub(crate)), builder(vis(pub), required, into), get(clone))]
     data_controller: Arc<DC>,
 
     /// Cache name. Most useful for debugging and logging.
@@ -84,13 +93,14 @@ where
     #[fieldx(get(copy), default(10_000))]
     max_capacity: u64,
 
+    /// The delay between two consecutive flushes. If a flush was manually requested then the timer is reset.
     #[fieldx(get(copy), set, default(Duration::from_secs(10)))]
     flush_interval: Duration,
 
     #[fieldx(get(copy), set, default(false))]
     delete_immediately: bool,
 
-    #[fieldx(vis(pub(crate)), lazy, clearer(private), get(clone))]
+    #[fieldx(vis(pub(crate)), lazy, clearer(private), get(clone), builder(off))]
     cache: Arc<Cache<DC::Key, ValueState<DC::Key, DC::Value>>>,
 
     // Here we keep the ensured update records, i.e. those ready to be submitted back to the data controller for processing.
@@ -114,7 +124,6 @@ where
                 .max_capacity(self.max_capacity())
                 .name(self.clear_name().unwrap_or_else(|| std::any::type_name::<DC::Value>()))
                 .eviction_policy(EvictionPolicy::tiny_lfu())
-                .support_invalidation_closures()
                 .build(),
         )
     }
@@ -476,7 +485,7 @@ where
         })
     }
 
-    #[inline(always)]
+    #[inline]
     pub async fn invalidate(&self, key: &DC::Key) {
         let myself = self.myself().unwrap();
         self.cache()
@@ -601,7 +610,7 @@ where
     // If a key has been deleted but not flushed yet do it now to prevent re-reading from the backend.
     pub(crate) async fn maybe_flush_key(&self, key: &DC::Key) -> Result<usize, DC::Error> {
         let maybe_update = {
-            // Localize the lock lexically so we keep it no longer then necessary; i.e. as long as it takes to possibly
+            // Localize the lock lexically so we keep it no longer than necessary; i.e. as long as it takes to possibly
             // remove an entry from from the buffer if it matches the criteria.
             let mut guard = self.updates_mut();
             if let hash_map::Entry::Occupied(update_entry) = guard.entry(key.clone()) {
@@ -627,30 +636,6 @@ where
         }
         Ok(0)
     }
-
-    // Mark the primary key as pending and invalidate all secondaries. When requested a secondary would finalize the
-    // primary key and then get initialized with its cloned value.
-    // pub(crate) async fn mark_pending(&self, key: &DC::Key, value: &DC::Value) {
-    //     let myself = self.myself().unwrap();
-    //     let primary_key = self.data_controller().primary_key_of(key, value);
-    //     // It doesn't matter if primary is cached or not. We'll vitalize it as the top authority of the value.
-    //     self.cache()
-    //         .entry(primary_key.clone())
-    //         .and_compute_with(|_| async move {
-    //             // let secondaries: HashSet<DC::Key> = myself
-    //             //     .data_controller()
-    //             //     .secondary_keys_of(key, value)
-    //             //     .into_iter()
-    //             //     .collect();
-    //             // if secondaries.len() > 0 {
-    //             //     let _ = myself
-    //             //         .cache()
-    //             //         .invalidate_entries_if(move |k, v| secondaries.contains(k))
-    //             //         .unwrap();
-    //             // }
-    //             Op::Put(ValueState::Pending(primary_key))
-    //         });
-    // }
 
     pub async fn close(&self) {
         let _ = self.flush().await;
