@@ -26,7 +26,7 @@ use super::ScriptWriter;
 const TICKER_CHARS: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 enum NumFormatter {
-    Sys(SystemLocale),
+    Sys(Box<SystemLocale>),
     Explicit(Locale),
 }
 
@@ -35,7 +35,7 @@ thread_local! {
         RefCell::new(SystemLocale::default()
             .map_or_else(
                 |_| NumFormatter::Explicit(Locale::en),
-                |sl| NumFormatter::Sys(sl),
+                |sl| NumFormatter::Sys(Box::new(sl)),
             ))
     };
 }

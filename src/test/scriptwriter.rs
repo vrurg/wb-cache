@@ -7,6 +7,7 @@ pub mod steps;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ use super::db::entity::Order as DbOrder;
 use super::types::OrderStatus;
 
 thread_local! {
-    static BATCH_STEPS: RefCell<Vec<Step>> = RefCell::new(Vec::new());
+    static BATCH_STEPS: RefCell<Vec<Step>> = const { RefCell::new(Vec::new()) };
 }
 
 enum AddPostProc {
@@ -143,7 +144,7 @@ pub struct ScriptWriter {
 
     /// "Planned" returns, per day
     #[fieldx(inner_mut, get_mut)]
-    returns: BTreeMap<u32, Vec<Order>>,
+    returns: HashMap<u32, Vec<Order>>,
 
     /// Backorders by their indices in the steps array, per product ID. When inventory is replenished, these orders will
     /// be processed first.
@@ -158,7 +159,7 @@ pub struct ScriptWriter {
     /// Pending orders by their indices in the steps array, keyed by shipping day.
     /// This is a map from the day to a queue of orders.
     #[fieldx(lock, get, get_mut)]
-    pending_orders: BTreeMap<u32, Vec<usize>>,
+    pending_orders: HashMap<u32, Vec<usize>>,
 
     /// Inventory record per product ID. Since product ID is its vector index in self.products, we use a Vec here too.
     #[fieldx(lock, get, get_mut)]
@@ -173,8 +174,8 @@ pub struct ScriptWriter {
     product_shipping: BTreeMap<u32, u32>,
 
     /// Map unique email into customer.
-    #[fieldx(lock, get, get_mut, default(BTreeMap::new()))]
-    customers: BTreeMap<String, Arc<Customer>>,
+    #[fieldx(lock, get, get_mut, default(HashMap::new()))]
+    customers: HashMap<String, Arc<Customer>>,
 
     /// Customer counts over the last few days.
     #[fieldx(lock, get, get_mut)]
@@ -254,7 +255,7 @@ impl ScriptWriter {
 
         self.reporter().out("--- Simulation finished ---")?;
         self.clear_task_tx();
-        while self.task_handlers().len() > 0 {
+        while !self.task_handlers().is_empty() {
             self.task_handlers_mut().pop().unwrap().join().unwrap();
         }
         self.reporter().out("--- All threads finished ---")?;
@@ -332,7 +333,7 @@ impl ScriptWriter {
 
                     let order = Order {
                         id:          Uuid::new_v4(),
-                        customer_id: customer_id,
+                        customer_id,
                         product_id:  *product_id,
                         quantity:    product_items,
                         status:      OrderStatus::New,
@@ -406,7 +407,7 @@ impl ScriptWriter {
         })
     }
 
-    fn task_pending(&self, indicies: &Vec<usize>) -> Result<()> {
+    fn task_pending(&self, indicies: &[usize]) -> Result<()> {
         BATCH_STEPS.with_borrow_mut(|batch_steps| -> Result<()> {
             self.maybe_init_batch_steps(batch_steps);
 
@@ -414,7 +415,7 @@ impl ScriptWriter {
                 let mut order = self.order_by_idx(step_idx)?;
 
                 order.status = OrderStatus::Shipped;
-                batch_steps.push(Step::UpdateOrder(order.into()));
+                batch_steps.push(Step::UpdateOrder(order));
             }
 
             self.add_steps(batch_steps.drain(0..batch_steps.len()))?;
@@ -505,7 +506,7 @@ impl ScriptWriter {
         //             .join(", ")
         //     ))?;
         // }
-        Ok(self.reporter().refresh_report()?)
+        self.reporter().refresh_report()
     }
 
     #[inline(always)]
@@ -518,7 +519,7 @@ impl ScriptWriter {
         }
     }
 
-    fn process_order(&self, mut step: Step, inventory: &mut Vec<InventoryRecord>) -> Result<(Step, AddPostProc)> {
+    fn process_order(&self, mut step: Step, inventory: &mut [InventoryRecord]) -> Result<(Step, AddPostProc)> {
         let (order, new_order) = match step {
             Step::AddOrder(ref mut order) => (order, true),
             Step::UpdateOrder(ref mut order) => (order, false),
@@ -527,41 +528,38 @@ impl ScriptWriter {
 
         let mut post_proc = AddPostProc::None;
 
-        match order.status {
-            OrderStatus::New => {
-                let Some(inv_rec) = inventory.get_mut(order.product_id as usize)
-                else {
-                    return Err(anyhow!("Product {} not found in inventory", order.product_id));
-                };
-                if inv_rec.stock() < order.quantity {
-                    // Not enough stock, mark the order as backordered.
-                    order.status = OrderStatus::Backordered;
-                    if new_order {
-                        post_proc = AddPostProc::BackorderNew(order.product_id);
-                    }
-                    else {
-                        post_proc = AddPostProc::BackorderAgain(order.product_id);
-                    }
+        if order.status == OrderStatus::New {
+            let Some(inv_rec) = inventory.get_mut(order.product_id as usize)
+            else {
+                return Err(anyhow!("Product {} not found in inventory", order.product_id));
+            };
+            if inv_rec.stock() < order.quantity {
+                // Not enough stock, mark the order as backordered.
+                order.status = OrderStatus::Backordered;
+                if new_order {
+                    post_proc = AddPostProc::BackorderNew(order.product_id);
                 }
                 else {
-                    if inv_rec.handling_days() > 0 {
-                        // If this inventory entry requires extra processing then the order goes into the pending queue.
-                        order.status = OrderStatus::Pending;
-                        post_proc = AddPostProc::Pending(self.current_day() + inv_rec.handling_days() as u32);
-                        // self.pending_orders_mut()
-                        //     .entry(self.current_day() + inv_rec.handling_days() as i32)
-                        //     .or_default()
-                        //     .push_back(order.clone());
-                    }
-                    else {
-                        // Same-day shipping.
-                        order.status = OrderStatus::Shipped;
-                    }
-                    // Either way, the stock gets reduced.
-                    *inv_rec.stock_mut() -= order.quantity;
+                    post_proc = AddPostProc::BackorderAgain(order.product_id);
                 }
             }
-            _ => (),
+            else {
+                if inv_rec.handling_days() > 0 {
+                    // If this inventory entry requires extra processing then the order goes into the pending queue.
+                    order.status = OrderStatus::Pending;
+                    post_proc = AddPostProc::Pending(self.current_day() + inv_rec.handling_days() as u32);
+                    // self.pending_orders_mut()
+                    //     .entry(self.current_day() + inv_rec.handling_days() as i32)
+                    //     .or_default()
+                    //     .push_back(order.clone());
+                }
+                else {
+                    // Same-day shipping.
+                    order.status = OrderStatus::Shipped;
+                }
+                // Either way, the stock gets reduced.
+                *inv_rec.stock_mut() -= order.quantity;
+            }
         }
 
         Ok((step, post_proc))
@@ -609,14 +607,14 @@ impl ScriptWriter {
             }
         }
 
-        if pending_orders.len() > 0 {
+        if !pending_orders.is_empty() {
             let mut pendings = self.pending_orders_mut();
             for (day, step_idx) in pending_orders {
                 pendings.entry(day).or_default().push(step_idx);
             }
         }
 
-        if backordered_new.len() > 0 || backordered_again.len() > 0 {
+        if !(backordered_new.is_empty() && backordered_again.is_empty()) {
             let mut backorders = self.backorders_mut();
             for (product_id, step_idx) in backordered_again {
                 backorders[product_id as usize].push_front(step_idx);
@@ -874,7 +872,7 @@ impl ScriptWriter {
                     //         product_id
                     //     ))?;
                     // }
-                    while orders.len() > 0 {
+                    while !orders.is_empty() {
                         let mut order = self.order_by_idx(*orders.front().unwrap())?;
                         if order.quantity <= new_stock {
                             new_stock -= order.quantity;
@@ -882,7 +880,7 @@ impl ScriptWriter {
                             let _ = orders.pop_front().unwrap();
                             order.status = OrderStatus::New;
                             // Submit backordered order for processing.
-                            inv_steps.push(Step::UpdateOrder(order.into()));
+                            inv_steps.push(Step::UpdateOrder(order));
                         }
                         else {
                             // Not enough stock to fulfill the order, leave it in the backorder queue.

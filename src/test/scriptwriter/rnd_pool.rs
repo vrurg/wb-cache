@@ -127,14 +127,13 @@ impl RndPool {
     }
 
     fn solve_gamma_scale(&self, shape: f64, min_scale: f64, max_scale: f64, fraction: f64, upper_bound: f64) -> f64 {
-        let scale = bisect(min_scale, max_scale, fraction, self.tolerance, |scale| {
+        bisect(min_scale, max_scale, fraction, self.tolerance, |scale| {
             let gamma = StatrsGamma::new(shape, scale).unwrap();
             let min = gamma.cdf(0.0);
             let max = gamma.cdf(upper_bound);
             max - min
         })
-        .expect("failed to bisect gamma distribution scale");
-        scale
+        .expect("failed to bisect gamma distribution scale")
     }
 
     fn build_orders_gamma(&self) -> Gamma<f64> {
@@ -192,7 +191,7 @@ impl RndPool {
         self.reporter()
             .set_rnd_pool_task_status(super::reporter::TaskStatus::Busy);
 
-        if self.randoms().len() == 0 {
+        if self.randoms().is_empty() {
             let _ = self.reporter().out(format!(
                 "Doubling randoms pool size from {}/{}",
                 self.randoms_min(),
@@ -202,7 +201,7 @@ impl RndPool {
             *self.randoms_min_mut() *= 2;
         }
 
-        if self.customers().len() == 0 {
+        if self.customers().is_empty() {
             let _ = self.reporter().out(format!(
                 "Doubling customers pool size from {}/{}",
                 self.customers_min(),

@@ -1,13 +1,9 @@
 use std::fmt::Display;
 use std::io::BufWriter;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use anyhow::Result;
-use clap::error::ContextKind;
-use clap::error::ContextValue;
 use clap::error::ErrorKind;
 use clap::CommandFactory;
 use clap::Parser;
@@ -17,7 +13,9 @@ use garde::Validate;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use postcard::to_io;
+use wb_cache::test::scriptwriter::steps::Step;
 use wb_cache::test::scriptwriter::ScriptWriter;
+use wb_cache::test::TestApp;
 
 #[derive(Debug, Clone, clap::Parser, Validate)]
 #[fxstruct(no_new, get(copy))]
@@ -70,6 +68,10 @@ struct Cli {
     #[clap(long, short)]
     #[garde(custom(Self::with_file(&self.script)))]
     save: bool,
+
+    #[clap(long, short)]
+    #[garde(custom(Self::with_file(&self.script)))]
+    load: bool,
 }
 
 impl Cli {
@@ -93,7 +95,7 @@ impl Cli {
     fn with_file<'a>(file: &'a Option<PathBuf>) -> impl FnOnce(&'a bool, &()) -> garde::Result {
         move |value, _| {
             if *value && file.is_none() {
-                Err(garde::Error::new("Saving requires a script file name"))
+                Err(garde::Error::new("Script file name is required"))
             }
             else {
                 Ok(())
@@ -102,23 +104,26 @@ impl Cli {
     }
 }
 
-#[fx_plus(app, no_new, sync, get, fallible(off, error(anyhow::Error)))]
+#[fx_plus(app, new(private), sync, get, fallible(off, error(anyhow::Error)))]
 struct SimApp {
     #[fieldx(lazy, fallible, get(clone), default(Cli::parse()))]
     cli: Cli,
 
     #[fieldx(lazy, get, fallible)]
     script_writer: Arc<ScriptWriter>,
+
+    #[fieldx(lazy, get, fallible)]
+    tempdir: tempfile::TempDir,
 }
 
 impl SimApp {
     fn build_cli(&self) -> Result<Cli> {
-        Ok(self.cli()?)
+        self.cli()
     }
 
     fn build_script_writer(&self) -> Result<Arc<ScriptWriter>> {
         let cli = self.cli()?;
-        Ok(ScriptWriter::builder()
+        ScriptWriter::builder()
             .period(cli.period())
             .product_count(cli.products())
             .initial_customers(cli.initial_customers())
@@ -128,7 +133,11 @@ impl SimApp {
             .min_customer_orders(cli.min_customer_orders() as f64)
             .max_customer_orders(cli.max_customer_orders() as f64)
             .return_window(cli.return_window())
-            .build()?)
+            .build()
+    }
+
+    fn build_tempdir(&self) -> Result<tempfile::TempDir> {
+        Ok(tempfile::Builder::new().prefix("wb-cache-simulation").tempdir()?)
     }
 
     fn validate(&self) -> Result<()> {
@@ -139,6 +148,10 @@ impl SimApp {
             err.exit();
         }
 
+        Ok(())
+    }
+
+    async fn execute_script(&self, script: Vec<Step>) -> Result<()> {
         Ok(())
     }
 
@@ -161,27 +174,34 @@ impl SimApp {
         Ok(())
     }
 
-    fn run() -> Result<()> {
+    async fn run() -> Result<()> {
         let app = SimApp::__fieldx_new();
         app.validate()?;
         let cli = app.cli()?;
 
         if cli.save() {
-            app.save_script()?;
+            tokio::task::spawn_blocking(move || app.save_script()).await??;
         }
 
         Ok(())
     }
 }
 
-fn main() -> Result<()> {
+impl TestApp for SimApp {
+    fn tempdir(&self) -> Result<PathBuf> {
+        self.tempdir().map(|t| t.path().to_path_buf())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     // let script = ScriptWriter::create()?;
 
     // let mut out = BufWriter::new(File::create("__script.bin")?);
     // to_io(&script, &mut out)?;
     // out.into_inner()?.sync_all()?;
 
-    SimApp::run()?;
+    SimApp::run().await?;
 
     Ok(())
 }

@@ -28,7 +28,7 @@ pub fn bisect(v0: f64, v1: f64, expected: f64, tolerance: f64, f: impl Fn(f64) -
         }
     }
 
-    return Err(anyhow::anyhow!("Bisection failed to converge"));
+    Err(anyhow::anyhow!("Bisection failed to converge"))
 }
 
 /// Skew normal distribution truncated to [a, b]

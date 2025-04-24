@@ -1,10 +1,11 @@
-use crate::{
-    cache::{ValueState, WBCache},
-    traits::WBDataController,
-};
-use fieldx_plus::{child_build, fx_plus};
+use crate::cache::ValueState;
+use crate::cache::WBCache;
+use crate::traits::WBDataController;
+use fieldx_plus::child_build;
+use fieldx_plus::fx_plus;
 use moka::Entry;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
+use std::sync::Arc;
 
 #[fx_plus(child(WBCache<DC>, rc_strong), sync, default(off))]
 pub struct WBEntry<DC>
@@ -45,7 +46,7 @@ where
         .unwrap()
     }
 
-    pub async fn value<'a>(&'a self) -> Result<&'a DC::Value, DC::Error> {
+    pub async fn value(&self) -> Result<&DC::Value, DC::Error> {
         self.parent().on_access(&self.key, &self.value).await
     }
 

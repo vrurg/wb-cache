@@ -1,18 +1,22 @@
-use crate::{entry_selector::WBEntryKeySelector, prelude::*, update_state::WBUpdateState};
-use fieldx_plus::{child_build, fx_plus};
-use moka::{
-    future::Cache,
-    ops::compute::{CompResult, Op},
-    policy::EvictionPolicy,
-};
-use std::{
-    collections::{hash_map, HashMap},
-    fmt::{Debug, Display},
-    future::Future,
-    hash::Hash,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use crate::entry_selector::WBEntryKeySelector;
+use crate::prelude::*;
+use crate::update_state::WBUpdateState;
+use fieldx_plus::child_build;
+use fieldx_plus::fx_plus;
+use moka::future::Cache;
+use moka::ops::compute::CompResult;
+use moka::ops::compute::Op;
+use moka::policy::EvictionPolicy;
+use std::collections::hash_map;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::future::Future;
+use std::hash::Hash;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use tokio::task::JoinHandle;
 
 // The key `K` for a secondary entry must always match the primary key,
 // as it uniquely identifies the corresponding primary value in the cache.
@@ -38,6 +42,12 @@ where
         }
     }
 }
+
+type WBArcCache<DC> = Arc<
+    Cache<<DC as WBDataController>::Key, ValueState<<DC as WBDataController>::Key, <DC as WBDataController>::Value>>,
+>;
+type WBUpdatesHash<DC> = HashMap<<DC as WBDataController>::Key, Arc<WBUpdateState<DC>>>;
+type WBUpdaterTask<DC> = JoinHandle<Result<(), Arc<<DC as WBDataController>::Error>>>;
 
 /// This is where all the magic happens!
 ///
@@ -66,7 +76,8 @@ where
 /// ```
 #[fx_plus(
     parent,
-    no_new,
+    new(off),
+    // Need explicit `default(off)` because the field defaults are for the builder type only.
     default(off),
     sync,
     builder(
@@ -101,14 +112,14 @@ where
     delete_immediately: bool,
 
     #[fieldx(vis(pub(crate)), lazy, clearer(private), get(clone), builder(off))]
-    cache: Arc<Cache<DC::Key, ValueState<DC::Key, DC::Value>>>,
+    cache: WBArcCache<DC>,
 
     // Here we keep the ensured update records, i.e. those ready to be submitted back to the data controller for processing.
     #[fieldx(private, lazy, clearer, get_mut, builder(off))]
-    updates: HashMap<DC::Key, Arc<WBUpdateState<DC>>>,
+    updates: WBUpdatesHash<DC>,
 
     #[fieldx(private, clearer, lock, get, set, builder(off))]
-    updater_task: tokio::task::JoinHandle<Result<(), Arc<DC::Error>>>,
+    updater_task: WBUpdaterTask<DC>,
 
     #[fieldx(lock, private, get(copy), set, builder(off), default(Instant::now()))]
     last_flush: Instant,
@@ -118,7 +129,7 @@ impl<DC> WBCache<DC>
 where
     DC: WBDataController,
 {
-    fn build_cache(&self) -> Arc<Cache<DC::Key, ValueState<DC::Key, DC::Value>>> {
+    fn build_cache(&self) -> WBArcCache<DC> {
         Arc::new(
             Cache::builder()
                 .max_capacity(self.max_capacity())
@@ -140,7 +151,7 @@ where
             })
         }
         else {
-            self.data_controller().get_primary_key_for(&key).await?
+            self.data_controller().get_primary_key_for(key).await?
         })
     }
 
@@ -456,7 +467,7 @@ where
             WBCompResult::Inserted(entry) | WBCompResult::Unchanged(entry) | WBCompResult::ReplacedWith(entry) => {
                 // log::debug!("Key '{key}' found or inserted");
                 let value = entry.into_value();
-                self.on_access(&key, &value).await?;
+                self.on_access(key, &value).await?;
                 Some(value)
             }
             WBCompResult::StillNone(_) => None,
@@ -477,12 +488,14 @@ where
             .await?
             .and_try_compute_with(|entry| async move { Ok(if entry.is_some() { Op::Remove } else { Op::Nop }) })
             .await?;
-        // Ok(self.on_delete(key, value).await?)
-        Ok(match result {
+
+        match result {
             WBCompResult::Removed(entry) => self.on_delete(&entry.key().clone(), Some(entry.into_value())).await?,
             WBCompResult::StillNone(_) => (),
             _ => panic!("Impossible result of removal operation: {result:?}"),
-        })
+        }
+
+        Ok(())
     }
 
     #[inline]
@@ -517,7 +530,7 @@ where
             .write_back(
                 updates
                     .into_iter()
-                    .filter_map(|(k, v)| v.clear_update().and_then(|u| Some((k, u)))),
+                    .filter_map(|(k, v)| v.update.blocking_write().take().map(|u| (k, u))),
             )
             .await?;
 
@@ -569,15 +582,15 @@ where
         }
     }
 
-    pub(crate) async fn on_new<'a>(&self, key: &DC::Key, value: DC::Value) -> Result<(), DC::Error> {
-        self.get_update_state(&key, Some(&value))
+    pub(crate) async fn on_new(&self, key: &DC::Key, value: DC::Value) -> Result<(), DC::Error> {
+        self.get_update_state(key, Some(&value))
             .await?
             .on_new(key, value)
             .await?;
         Ok(())
     }
 
-    pub(crate) async fn on_change<'a>(
+    pub(crate) async fn on_change(
         &self,
         key: &DC::Key,
         value: &DC::Value,
@@ -615,7 +628,7 @@ where
             let mut guard = self.updates_mut();
             if let hash_map::Entry::Occupied(update_entry) = guard.entry(key.clone()) {
                 let update = update_entry.get();
-                if update.has_update() && update.is_delete() {
+                if update.has_update().await && update.is_delete() {
                     Some(update_entry.remove_entry().1)
                 }
                 else {
@@ -630,7 +643,7 @@ where
         if let Some(update) = maybe_update {
             // log::debug!("[{}] There is a 'delete' update entry for key '{key}'", self.name(),);
             self.data_controller()
-                .write_back([(key.clone(), update.clear_update().unwrap())].into_iter())
+                .write_back([(key.clone(), update.clear_update().await.unwrap())].into_iter())
                 .await?;
             return Ok(1);
         }

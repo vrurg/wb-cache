@@ -50,12 +50,12 @@ impl Customer {
             return Ok(0.0);
         }
         Ok(Poisson::new(lambda)
-            .or_else(|err| {
-                Err(anyhow!("Poisson(lambda={lambda}): {}", err).context(format!(
+            .map_err(|err| {
+                anyhow!("Poisson(lambda={lambda}): {}", err).context(format!(
                     "Customer EQ: {}; orders per day: {}",
                     self.erratic_quotient(),
                     self.orders_per_day()
-                )))
+                ))
             })?
             .sample(&mut rng) as f64)
     }

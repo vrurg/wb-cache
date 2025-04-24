@@ -54,7 +54,6 @@ impl CustomerModel {
     pub fn adjust_growth_rate(&self, expected_customers: f64, day: u32) {
         let gr0 = 0.0;
         let gr1 = 0.1;
-        let day = day;
 
         self.set_growth_rate(gr1);
 

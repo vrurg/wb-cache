@@ -12,6 +12,13 @@ use super::entity::inventory::IncomingShipment;
 #[derive(Display, Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Step {
+    /// Initial header for the script with the introductory information.
+    #[serde(rename = "h")]
+    Header {
+        period:          u32,
+        products:        u32,
+        market_capacity: u32,
+    },
     /// The simulation day number.
     #[serde(rename = "d")]
     Day(u32),
