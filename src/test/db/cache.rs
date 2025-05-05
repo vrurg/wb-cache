@@ -8,6 +8,7 @@ use sea_orm::DatabaseConnection;
 use sea_orm::DeleteMany;
 use sea_orm::EntityTrait;
 use sea_orm::IntoActiveModel;
+use sea_orm::TransactionTrait;
 use sea_orm_migration::async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -40,7 +41,7 @@ where
 
 #[async_trait]
 pub trait DBConnectionProvider: Sync + Send + 'static {
-    async fn db_connection(&self) -> Result<Arc<DatabaseConnection>>;
+    async fn db_connection(&self) -> Result<&DatabaseConnection>;
 }
 
 // Common implementation of WBDataController methods.
@@ -73,7 +74,13 @@ where
         let mut inserts = vec![];
         let mut deletes = vec![];
 
-        let db_conn = self.db_conn_provider().db_connection().await?;
+        let conn_provider = self.db_conn_provider();
+        let db_conn = conn_provider.db_connection().await?;
+
+        let transaction = db_conn
+            .begin()
+            .await
+            .inspect_err(|e| eprintln!("Failed to start transaction: {e:?}"))?;
 
         tokio::pin!(update_records);
 
@@ -83,7 +90,7 @@ where
                 CacheUpdates::Update(a) => {
                     // Updates cannot be done all at once. Do them right in place then.
                     let a_copy = a.clone();
-                    a.update(db_conn.as_ref())
+                    a.update(&transaction)
                         .await
                         .inspect_err(|e| eprintln!("Failed to update record: {e:?}\n{a_copy:#?}"))?;
                 }
@@ -92,14 +99,19 @@ where
         }
 
         if !inserts.is_empty() {
-            T::insert_many(inserts).exec_with_returning(db_conn.as_ref()).await?;
+            T::insert_many(inserts).exec(&transaction).await?;
         }
 
         if !deletes.is_empty() {
             self.delete_many_condition(T::delete_many(), deletes)
-                .exec(db_conn.as_ref())
+                .exec(&transaction)
                 .await?;
         }
+
+        transaction
+            .commit()
+            .await
+            .inspect_err(|err| eprintln!("Failed to commit transaction: {err:?}"))?;
 
         Ok(())
     }
