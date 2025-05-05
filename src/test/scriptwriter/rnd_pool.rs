@@ -13,12 +13,20 @@ use rand_distr::Gamma;
 use statrs::distribution::ContinuousCDF;
 use statrs::distribution::Gamma as StatrsGamma;
 
+use crate::test::types::simerr;
+use crate::test::types::SimErrorAny;
+
 use super::entity::customer::Customer;
 use super::math::bisect;
 use super::reporter::Reporter;
 use super::ScriptWriter;
 
-#[fx_plus(child(ScriptWriter, unwrap(map(anyhow::Error, no_scenario))), rc, sync, default(off))]
+#[fx_plus(
+    child(ScriptWriter, unwrap(or_else(SimErrorAny, no_scenario))),
+    rc,
+    sync,
+    default(off)
+)]
 pub struct RndPool {
     #[fieldx(lock, get(copy), get_mut, default(500))]
     randoms_min: usize,
@@ -182,8 +190,8 @@ impl RndPool {
             .unwrap();
     }
 
-    fn no_scenario(&self) -> anyhow::Error {
-        anyhow::anyhow!("Scenario object is gone!")
+    fn no_scenario(&self) -> SimErrorAny {
+        simerr!("Scenario object is gone!")
     }
 
     fn replenish(&self, rng: &mut ThreadRng) {

@@ -1,4 +1,5 @@
 #![cfg(any(test, feature = "test"))]
+pub mod cache;
 pub mod entity;
 pub mod migrations;
 

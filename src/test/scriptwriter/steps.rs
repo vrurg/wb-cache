@@ -6,21 +6,26 @@ use crate::test::db::entity::Customer as DbCustomer;
 use crate::test::db::entity::InventoryRecord as DbInventoryRecord;
 use crate::test::db::entity::Order as DbOrder;
 use crate::test::db::entity::Product as DbProduct;
+use crate::test::db::entity::Session as DbSession;
 
 use super::entity::inventory::IncomingShipment;
+use super::entity::inventory::InventoryCheck;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScriptTitle {
+    pub period:          u32,
+    pub products:        u32,
+    pub market_capacity: u32,
+}
 
 #[derive(Display, Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Step {
     /// Initial header for the script with the introductory information.
     #[serde(rename = "h")]
-    Header {
-        period:          u32,
-        products:        u32,
-        market_capacity: u32,
-    },
-    /// The simulation day number.
+    Title(ScriptTitle),
     #[serde(rename = "d")]
+    /// The simulation day number.
     Day(u32),
     /// Add a new product into the database.
     // #[serde(rename = "ap")]
@@ -31,17 +36,26 @@ pub enum Step {
     /// A new purchase order from customer
     #[serde(rename = "ao")]
     AddOrder(DbOrder),
-    /// Update an existing order.
     #[serde(rename = "uo")]
     UpdateOrder(DbOrder),
+    /// Add a new session entry.
+    #[serde(rename = "as")]
+    AddSession(DbSession),
+    /// Update an existing session entry.
+    UpdateSession(DbSession),
+    /// Collect expired sessions.
+    CollectSessions,
+    /// Update an existing order status.
     /// Add a new inventory record.
     #[serde(rename = "ai")]
     AddInventoryRecord(DbInventoryRecord),
     /// Update an existing inventory record.
-    #[serde(rename = "as")]
+    #[serde(rename = "is")]
     AddStock(IncomingShipment),
+    /// Increase product views counter.
+    ViewProduct(u32),
     /// Check the inventory stock and make sure it corresponds to the expected value.
     /// This is useful for testing purposes to ensure that scenario is in sync with the simulation.
     #[serde(rename = "ci")]
-    CheckInventory { product_id: u32, stock: u32 },
+    CheckInventory(InventoryCheck),
 }

@@ -11,15 +11,6 @@ pub struct InventoryRecord {
     handling_days: u8,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IncomingShipment {
-    #[serde(rename = "p")]
-    pub product_id: u32,
-    #[serde(rename = "b")]
-    pub batch_size: u32,
-}
-
 impl InventoryRecord {
     pub fn new(product_id: u32, stock: u32, handling_days: u8) -> Self {
         Self {
@@ -36,6 +27,36 @@ impl From<InventoryRecord> for crate::test::db::entity::InventoryRecord {
             product_id:    record.product_id,
             stock:         record.stock,
             handling_days: record.handling_days,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncomingShipment {
+    #[serde(rename = "p")]
+    pub product_id: u32,
+    #[serde(rename = "b")]
+    pub batch_size: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InventoryCheck {
+    #[serde(rename = "p")]
+    pub product_id: u32,
+    #[serde(rename = "s")]
+    pub stock:      u32,
+    #[serde(rename = "c")]
+    pub comment:    String,
+}
+
+impl InventoryCheck {
+    pub fn new<S: ToString>(product_id: u32, stock: u32, comment: S) -> Self {
+        Self {
+            product_id,
+            stock,
+            comment: comment.to_string(),
         }
     }
 }

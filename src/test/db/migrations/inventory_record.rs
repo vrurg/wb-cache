@@ -20,8 +20,15 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(InventoryRecords::Stock).integer().not_null())
                     .col(
                         ColumnDef::new(InventoryRecords::HandlingDays)
-                            .tiny_unsigned() // using tiny unsigned for u8 type
+                            .tiny_unsigned()
                             .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-inventory_records-product_id")
+                            .from(InventoryRecords::Table, InventoryRecords::ProductId)
+                            .to(super::product::Products::Table, super::product::Products::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
                     )
                     .to_owned(),
             )
@@ -40,7 +47,7 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(Iden)]
-enum InventoryRecords {
+pub enum InventoryRecords {
     Table,
     ProductId,
     Stock,

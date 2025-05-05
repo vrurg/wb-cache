@@ -2,11 +2,15 @@ pub mod traits;
 
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::fmt::Write;
+use std::time::Instant;
 
 use console::Style;
 use fieldx::fxstruct;
+use indicatif::style::ProgressTracker;
 use indicatif::MultiProgress;
 use indicatif::ProgressBar;
+use indicatif::ProgressState;
 use indicatif::ProgressStyle;
 pub use traits::*;
 
@@ -50,7 +54,24 @@ impl Debug for PStyle {
     }
 }
 
-#[fxstruct(new(off), sync, fallible(off, error(anyhow::Error)), builder)]
+struct PerSecFmt;
+
+impl ProgressTracker for PerSecFmt {
+    fn clone_box(&self) -> Box<dyn ProgressTracker> {
+        Box::new(PerSecFmt)
+    }
+
+    fn tick(&mut self, _state: &ProgressState, _now: Instant) {}
+
+    fn reset(&mut self, _state: &ProgressState, _now: Instant) {}
+
+    fn write(&self, state: &ProgressState, w: &mut dyn Write) {
+        // Writes, for example, "12.34/s"
+        write!(w, "{:.2}/s", state.per_sec()).unwrap();
+    }
+}
+
+#[fxstruct(new(off), sync, fallible(off, error(SimError)), builder)]
 pub struct ProgressUI {
     #[fieldx(lazy, get, builder(off))]
     multi_progress: Option<MultiProgress>,
@@ -82,15 +103,16 @@ impl ProgressUI {
     #[inline(always)]
     fn build_progress_style_main(&self) -> ProgressStyle {
         ProgressStyle::default_bar()
-            .template("{spinner:.dim.cyan} [{elapsed_precise:.cyan}] {prefix:.cyan} {bar:30.cyan.on_240} {pos:>2.cyan}/{len:>2.cyan} {msg:.cyan}")
+            .template("[{elapsed_precise:.cyan}] [{eta:>4}] {percent_precise:>7}% {bar:30.cyan.on_240} {pos:>2.cyan}/{len:>2.cyan} {per_sec_short} ({prefix}) {msg:.cyan}")
             .expect("Main progress style")
+            .with_key("per_sec_short", PerSecFmt)
             .progress_chars("█▉▊▋▌▍▎▏ ")
     }
 
     #[inline(always)]
     fn build_progress_style_minor(&self) -> ProgressStyle {
         ProgressStyle::default_bar()
-            .template("{spinner:.dim.green} [{elapsed_precise}] {prefix} {bar:5.250.on_240} {pos:>2}/{len:>2} {msg}")
+            .template("[{elapsed_precise}] {bar:5.250.on_240} {pos:>2}/{len:>2} ({prefix}) {msg}")
             .expect("Minor progress style")
             .progress_chars("█▉▊▋▌▍▎▏ ")
     }
@@ -105,12 +127,12 @@ impl ProgressUI {
     }
 
     fn _println(&self, msg_type: MsgType, msg: String) {
-        let prefix = self.message_style(msg_type).apply_to(format!("[{}]", msg_type));
+        let prefix = self.message_style(msg_type).apply_to(format!("[{msg_type}]"));
         if matches!(msg_type, MsgType::Info) {
-            println!("{} {}", prefix, msg);
+            println!("{prefix} {msg}");
         }
         else {
-            eprintln!("{} {}", prefix, msg);
+            eprintln!("{prefix} {msg}");
         }
     }
 
@@ -150,7 +172,7 @@ impl ProgressUI {
         }
     }
 
-    pub fn new_progress(&self, style: PStyle, order: Option<POrder>) -> Option<ProgressBar> {
+    pub fn acquire_progress(&self, style: PStyle, order: Option<POrder>) -> Option<ProgressBar> {
         let mp = self.multi_progress();
 
         if mp.is_none() {
@@ -179,7 +201,7 @@ impl ProgressUI {
     }
 
     pub fn finish(&self) {
-        self.multi_progress.clear();
+        // self.multi_progress.clear();
     }
 }
 

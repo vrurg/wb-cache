@@ -3,6 +3,7 @@ pub mod customer;
 pub mod inventory_record;
 pub mod order;
 pub mod product;
+pub mod session;
 
 use sea_orm_migration::prelude::*;
 
@@ -15,6 +16,7 @@ impl MigratorTrait for Migrator {
             Box::new(inventory_record::Migration),
             Box::new(order::Migration),
             Box::new(product::Migration),
+            Box::new(session::Migration),
         ]
     }
 }

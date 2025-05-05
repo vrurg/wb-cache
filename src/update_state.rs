@@ -16,8 +16,8 @@ where
     #[fieldx(mode(async), vis(pub(crate)), clearer, predicate, writer, builder(off))]
     pub(crate) update: DC::CacheUpdate,
 
-    #[fieldx(lock, get(vis(pub(crate)), copy), set(private), default(false), builder(off))]
-    is_delete: bool,
+    #[fieldx(lock, set(private), default(false), builder(off))]
+    pub(crate) is_delete: bool,
 }
 
 // !!! IMPORTANT NOTE TO MYSELF: never try to update parent's cache object here! We only take care of the single update
@@ -42,7 +42,6 @@ where
     ) -> Result<(), DC::Error> {
         let mut guard = self.write_update().await;
         let parent = self.parent();
-        log::debug!("[{}] passing on_change({key}) event to DC", parent.name());
         *guard = parent
             .data_controller()
             .on_change(key, value, old_value, guard.take())

@@ -5,15 +5,23 @@ use indicatif::ProgressBar;
 
 #[allow(dead_code)]
 pub trait MaybeProgress {
+    fn maybe_set_length(&self, len: u64);
     fn maybe_inc(&self, n: u64);
     fn maybe_enable_steady_tick(&self, dur: std::time::Duration);
     fn maybe_finish(&self);
     fn maybe_finish_with_message(&self, msg: impl Into<Cow<'static, str>>);
     fn maybe_set_message(&self, msg: impl Into<Cow<'static, str>>);
+    fn maybe_set_prefix(&self, prefix: impl Into<Cow<'static, str>>);
     fn maybe_set_position(&self, pos: u64);
 }
 
 impl MaybeProgress for Option<ProgressBar> {
+    fn maybe_set_length(&self, len: u64) {
+        if let Some(pb) = self {
+            pb.set_length(len);
+        }
+    }
+
     fn maybe_inc(&self, n: u64) {
         if let Some(pb) = self {
             pb.inc(n);
@@ -44,6 +52,15 @@ impl MaybeProgress for Option<ProgressBar> {
         }
         else {
             println!("{}", msg.into());
+        }
+    }
+
+    fn maybe_set_prefix(&self, prefix: impl Into<Cow<'static, str>>) {
+        if let Some(pb) = self {
+            pb.set_prefix(prefix);
+        }
+        else {
+            println!("{}", prefix.into());
         }
     }
 

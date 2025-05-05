@@ -16,26 +16,31 @@ use serde::Serialize;
 use tokio_stream::Stream;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "products")]
+#[sea_orm(table_name = "sessions")]
 #[serde(deny_unknown_fields)]
 pub struct Model {
-    #[sea_orm(primary_key)]
+    #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "i")]
-    pub id:    u32,
-    #[serde(rename = "n")]
-    pub name:  String,
-    #[serde(rename = "p")]
-    pub price: f64,
-    #[serde(rename = "v")]
-    pub views: i64,
+    pub id:          i64,
+    #[serde(rename = "c")]
+    pub customer_id: Option<u32>,
+    #[serde(rename = "e")]
+    pub expires_on:  i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::customer::Entity",
+        from = "Column::CustomerId",
+        to = "super::customer::Column::Id"
+    )]
+    Customer,
+}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-// Manager for product entity
+// Manager for session entity
 #[fx_plus(child(DBCP, rc_strong), sync, rc)]
 pub struct Manager<DBCP>
 where
@@ -45,10 +50,10 @@ impl<DBCP> Manager<DBCP>
 where
     DBCP: DBConnectionProvider,
 {
-    pub async fn get_by_product_id(&self, product_id: u32) -> Result<Vec<Model>> {
+    pub async fn get_by_session_id(&self, session_id: i64) -> Result<Vec<Model>> {
         let db = self.db_conn_provider().db_connection().await?;
         Ok(Entity::find()
-            .filter(Column::Id.eq(product_id))
+            .filter(Column::Id.eq(session_id))
             .all(db.as_ref())
             .await?)
     }
@@ -61,7 +66,7 @@ where
 {
     type CacheUpdate = CacheUpdates<ActiveModel>;
     type Error = SimErrorAny;
-    type Key = u32;
+    type Key = i64;
     type Value = Model;
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>> {

@@ -1,5 +1,5 @@
 use fieldx::fxstruct;
-use uuid::Uuid;
+use sea_orm::prelude::Uuid;
 
 use crate::test::types::OrderStatus;
 

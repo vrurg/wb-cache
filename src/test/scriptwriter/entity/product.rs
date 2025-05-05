@@ -50,6 +50,10 @@ pub struct Product {
     /// sampling process to simulate how many items of this product a customer buys in a single order.
     #[fieldx(lazy, get(copy), builder(off))]
     daily_estimate: f64,
+
+    /// How likely the product is to be viewed by a customer when purchase decision is being made.
+    #[fieldx(lazy, get(copy))]
+    view_probability: f64,
 }
 
 impl Product {
@@ -67,6 +71,15 @@ impl Product {
         self.product_model().customer_interest(self.price()) * self.daily_quotient()
     }
 
+    fn build_view_probability(&self) -> f64 {
+        // Here we try to simulate a psychological effect of the product price on the customer. The higher the price,
+        // the more likely the customer to view it; and vice versa. In the latter case they would rather buy something
+        // cheap by immediately sending a product directly to the cart, without entering its page. Contrary, they're
+        // less likely to buy a more expensive product but would still willing to look at it.
+        // The formula simulates the effect by squeezing the customer interest curve towards its center by 30%.
+        ((self.product_model().customer_interest(self.price()) - 0.5) * 0.85 + 0.5) * self.daily_quotient()
+    }
+
     pub fn supplies_in(&self) -> f64 {
         self.supply_distribution().sample(&mut rand::rng())
     }
@@ -78,6 +91,7 @@ impl From<Product> for DbProduct {
             id:    product.id,
             name:  product.name,
             price: product.price,
+            views: 0,
         }
     }
 }

@@ -15,17 +15,18 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(Product::Table)
+                    .table(Products::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(Product::Id)
+                        ColumnDef::new(Products::Id)
                             .integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Product::Name).string().not_null())
-                    .col(ColumnDef::new(Product::Price).decimal().not_null())
+                    .col(ColumnDef::new(Products::Name).string().not_null())
+                    .col(ColumnDef::new(Products::Price).double().not_null())
+                    .col(ColumnDef::new(Products::Views).big_unsigned().not_null())
                     .to_owned(),
             )
             .await
@@ -33,14 +34,17 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Drop Product table migration logic here.
-        manager.drop_table(Table::drop().table(Product::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(Products::Table).to_owned())
+            .await
     }
 }
 
 #[derive(Iden)]
-pub enum Product {
+pub enum Products {
     Table,
     Id,
     Name,
     Price,
+    Views,
 }

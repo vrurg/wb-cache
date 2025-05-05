@@ -1,13 +1,13 @@
 use crate::entry_selector::WBEntryKeySelector;
 use crate::prelude::*;
+use crate::traits::WBObserver;
 use crate::update_state::WBUpdateState;
+
 use fieldx_plus::child_build;
 use fieldx_plus::fx_plus;
 use moka::future::Cache;
 use moka::ops::compute::CompResult;
-use moka::ops::compute::Op;
 use moka::policy::EvictionPolicy;
-use std::collections::hash_map;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -17,6 +17,21 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::JoinHandle;
+use tokio_stream::StreamExt;
+use tokio_stream::{self as stream};
+
+pub use moka::ops::compute::Op;
+
+macro_rules! on_event {
+    ($self:ident, $method:ident($($args:tt)*)) => {
+        let observers = $self.observers().await;
+        if !observers.is_empty() {
+            for observer in observers.iter() {
+                observer.$method($($args)*).await?;
+            }
+        }
+    };
+}
 
 // The key `K` for a secondary entry must always match the primary key,
 // as it uniquely identifies the corresponding primary value in the cache.
@@ -123,6 +138,9 @@ where
 
     #[fieldx(lock, private, get(copy), set, builder(off), default(Instant::now()))]
     last_flush: Instant,
+
+    #[fieldx(mode(async), private, lock, get, builder("_observers", private), default)]
+    observers: Vec<Box<dyn WBObserver<DC>>>,
 }
 
 impl<DC> WBCache<DC>
@@ -167,7 +185,7 @@ where
     {
         let myself = self.myself().unwrap();
 
-        self.maybe_flush_key(key).await?;
+        self.maybe_flush_deleted(key).await?;
 
         let result = self
             .cache()
@@ -193,7 +211,7 @@ where
                 let op = match op {
                     Op::Remove => {
                         if let Some(ref old_v) = old_v {
-                            let secondaries = myself.data_controller().secondary_keys_of(key, old_v);
+                            let secondaries = myself.data_controller().secondary_keys_of(old_v);
                             // If primary gets removed all related secondaries are to be dropped out of the cache.
                             for skey in secondaries {
                                 myself.cache().invalidate(&skey).await;
@@ -206,13 +224,13 @@ where
                     Op::Put(v) => {
                         let v = v;
                         if let Some(old_v) = old_v {
-                            myself.on_change(key, &v, old_v).await?
+                            myself.on_change(key, &v, old_v).await?;
+                            Op::Put(ValueState::Primary(v))
                         }
                         else {
-                            myself.on_new(key, v.clone()).await?
+                            myself.on_new(key, v.clone()).await?;
+                            Op::Nop
                         }
-
-                        Op::Put(ValueState::Primary(v))
                     }
                     Op::Nop => {
                         // Even if user wants to do nothing we still need to put the newly fetched value into cache.
@@ -284,7 +302,7 @@ where
                     match f(None).await? {
                         Op::Nop | Op::Remove => WBCompResult::StillNone(Arc::new(secondary_key)),
                         Op::Put(new_value) => {
-                            let pkey = myself.data_controller().primary_key_of(&secondary_key, &new_value);
+                            let pkey = myself.data_controller().primary_key_of(&new_value);
                             myself.on_new(&pkey, new_value.clone()).await?;
                             primary_key = Some(pkey);
                             WBCompResult::Inserted(WBEntry::new(&myself, secondary_key, new_value))
@@ -326,7 +344,7 @@ where
         key: &DC::Key,
         init: impl Future<Output = Result<DC::Value, DC::Error>>,
     ) -> Result<WBEntry<DC>, Arc<DC::Error>> {
-        self.maybe_flush_key(key).await?;
+        self.maybe_flush_deleted(key).await?;
 
         let cache_entry = self
             .cache()
@@ -371,7 +389,7 @@ where
                 }
                 else {
                     let new_value = init.await?;
-                    let pkey = self.data_controller().primary_key_of(key, &new_value);
+                    let pkey = self.data_controller().primary_key_of(&new_value);
                     self.on_new(&pkey, new_value.clone()).await?;
                     self.cache().insert(pkey.clone(), ValueState::Primary(new_value)).await;
                     pkey
@@ -389,20 +407,26 @@ where
         })
     }
 
-    // This method allows for each individual thread to block the entire cache for no longer than it takes to create a
-    // new hash entry.
+    // This method ensures that each thread locks the entire cache only for the duration required to create a new hash
+    // entry.
     pub(crate) async fn get_update_state(
         &self,
         key: &DC::Key,
         value: Option<&DC::Value>,
     ) -> Result<Arc<WBUpdateState<DC>>, DC::Error> {
-        // log::debug!("[{}] get_update_state({key})", self.name());
+        if self.updates().len() as u64 >= self.max_updates() {
+            self.flush().await?;
+        }
+        else {
+            self.check_updater_task().await;
+        }
+
         let update_state;
         {
             let mut updates = self.updates_mut();
 
             let update_key = value
-                .map(|v| self.data_controller().primary_key_of(key, v))
+                .map(|v| self.data_controller().primary_key_of(v))
                 .unwrap_or(key.clone());
 
             if !updates.contains_key(&update_key) {
@@ -414,14 +438,6 @@ where
             }
         };
 
-        if self.updates().len() as u64 >= self.max_updates() {
-            self.flush().await?;
-        }
-        else {
-            self.check_updater_task().await;
-        }
-
-        // log::debug!("[{}] get_update_state({key}) done", self.name());
         Ok(update_state)
     }
 
@@ -456,8 +472,6 @@ where
     }
 
     pub async fn get(&self, key: &DC::Key) -> Result<Option<DC::Value>, DC::Error> {
-        log::debug!("[{}] GET({key})", self.name());
-
         let outcome = self
             .entry(key.clone())
             .await?
@@ -465,7 +479,6 @@ where
             .await?;
         Ok(match outcome {
             WBCompResult::Inserted(entry) | WBCompResult::Unchanged(entry) | WBCompResult::ReplacedWith(entry) => {
-                // log::debug!("Key '{key}' found or inserted");
                 let value = entry.into_value();
                 self.on_access(key, &value).await?;
                 Some(value)
@@ -476,7 +489,8 @@ where
     }
 
     #[inline]
-    pub async fn insert(&self, key: DC::Key, value: DC::Value) -> Result<(), Arc<DC::Error>> {
+    pub async fn insert(&self, value: DC::Value) -> Result<(), Arc<DC::Error>> {
+        let key = self.data_controller().primary_key_of(&value);
         Ok(self.on_new(&key, value).await?)
     }
 
@@ -506,7 +520,7 @@ where
             .and_compute_with(|entry| async {
                 if let Some(entry) = entry {
                     if let ValueState::Primary(value) = entry.value() {
-                        for secondary in myself.data_controller().secondary_keys_of(key, value) {
+                        for secondary in myself.data_controller().secondary_keys_of(value) {
                             myself.cache().invalidate(&secondary).await;
                         }
                     }
@@ -524,31 +538,41 @@ where
 
         let updates_count = updates.len();
 
-        log::info!("Flushing {} cache; count={}", self.name(), updates_count);
+        if updates_count > 0 {
+            on_event!(self, on_flush());
 
-        self.data_controller()
-            .write_back(
-                updates
-                    .into_iter()
-                    .filter_map(|(k, v)| v.update.blocking_write().take().map(|u| (k, u))),
-            )
-            .await?;
+            // Create a stream of updates to be flushed. Skip the entries where no update is present.
+            let stream = stream::iter(updates.into_iter())
+                .then(|(k, v)| async move { (k, v.update.write().await.take()) })
+                .filter_map(|(k, u)| u.map(|u| (k, u)));
 
-        self.set_last_flush(Instant::now());
+            self.data_controller().write_back(stream).await?;
+            self.set_last_flush(Instant::now());
+        }
 
         Ok(updates_count)
     }
 
+    pub async fn flush_one(&self, key: &DC::Key) -> Result<usize, DC::Error> {
+        let mut updates = self.updates_mut();
+        if let Some(update) = updates.remove(key) {
+            if update.has_update().await {
+                let update = update.clear_update().await.unwrap();
+
+                on_event!(self, on_flush_one(&update));
+
+                let stream = stream::iter([(key.clone(), update)]);
+                self.data_controller().write_back(stream).await?;
+                return Ok(1);
+            }
+        }
+        Ok(0)
+    }
+
     async fn monitor_updates(&self) -> Result<(), Arc<DC::Error>> {
-        log::debug!("[{}] Starting updates monitor", self.name());
         loop {
-            // log::debug!("[{}] Entering monitor loop.", self.name());
             if self.updates().is_empty() {
-                log::debug!(
-                    "[{}] Stopping monitoring task since no updates have been generated.",
-                    self.name()
-                );
-                // Don't take resourses if no updates have been produced during the last flush interval.
+                // Don't consume resources if no updates have been produced during the last flush interval.
                 break;
             }
 
@@ -557,7 +581,6 @@ where
             if remaining == Duration::ZERO {
                 // When last flush took place earlier than the flush interval ago...
                 self.flush().await?;
-                log::debug!("[{}] Cache flushed by timeout.", self.name());
             }
 
             tokio::time::sleep(interval - remaining).await;
@@ -566,19 +589,9 @@ where
     }
 
     async fn check_updater_task(&self) {
-        // log::debug!(
-        //     "[{}] Checking updater. (some? {}, finished? {})",
-        //     self.name(),
-        //     self.updater_task().is_some(),
-        //     self.updater_task().as_ref().map_or(false, |t| t.is_finished())
-        // );
-        if self.updater_task().as_ref().map_or(true, |t| t.is_finished()) {
-            // log::debug!("[{}] Starting updater.", self.name());
+        if self.flush_interval() != Duration::ZERO && self.updater_task().as_ref().map_or(true, |t| t.is_finished()) {
             let async_self = self.myself().unwrap();
             self.set_updater_task(tokio::spawn(async move { async_self.monitor_updates().await }));
-        }
-        else {
-            // log::debug!("[{}] Updater is alive.", self.name());
         }
     }
 
@@ -604,7 +617,6 @@ where
     }
 
     pub(crate) async fn on_access<'a>(&self, key: &DC::Key, value: &'a DC::Value) -> Result<&'a DC::Value, DC::Error> {
-        log::debug!("[{}] ACCESS({key})", self.name());
         self.get_update_state(key, Some(value))
             .await?
             .on_access(key, value)
@@ -615,39 +627,17 @@ where
     pub(crate) async fn on_delete(&self, key: &DC::Key, value: Option<DC::Value>) -> Result<(), DC::Error> {
         self.get_update_state(key, value.as_ref()).await?.on_delete(key).await?;
         if self.delete_immediately() {
-            self.maybe_flush_key(key).await?;
+            self.maybe_flush_deleted(key).await?;
         }
         Ok(())
     }
 
     // If a key has been deleted but not flushed yet do it now to prevent re-reading from the backend.
-    pub(crate) async fn maybe_flush_key(&self, key: &DC::Key) -> Result<usize, DC::Error> {
-        let maybe_update = {
-            // Localize the lock lexically so we keep it no longer than necessary; i.e. as long as it takes to possibly
-            // remove an entry from from the buffer if it matches the criteria.
-            let mut guard = self.updates_mut();
-            if let hash_map::Entry::Occupied(update_entry) = guard.entry(key.clone()) {
-                let update = update_entry.get();
-                if update.has_update().await && update.is_delete() {
-                    Some(update_entry.remove_entry().1)
-                }
-                else {
-                    None
-                }
-            }
-            else {
-                None
-            }
-        };
-
-        if let Some(update) = maybe_update {
-            // log::debug!("[{}] There is a 'delete' update entry for key '{key}'", self.name(),);
-            self.data_controller()
-                .write_back([(key.clone(), update.clear_update().await.unwrap())].into_iter())
-                .await?;
-            return Ok(1);
+    pub(crate) async fn maybe_flush_deleted(&self, key: &DC::Key) -> Result<usize, DC::Error> {
+        if self.cache().contains_key(key) {
+            return Ok(0);
         }
-        Ok(0)
+        return self.flush_one(key).await;
     }
 
     pub async fn close(&self) {
@@ -657,5 +647,20 @@ where
             let _ = updater.await;
         }
         self.clear_cache();
+    }
+}
+
+impl<DC> WBCacheBuilder<DC>
+where
+    DC: WBDataController,
+{
+    pub fn observer(mut self, observer: impl WBObserver<DC>) -> Self {
+        if let Some(ref mut observers) = self.observers {
+            observers.push(Box::new(observer));
+            self
+        }
+        else {
+            self._observers(vec![Box::new(observer)])
+        }
     }
 }

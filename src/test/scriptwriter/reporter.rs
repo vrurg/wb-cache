@@ -6,7 +6,6 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Result;
 use console::style;
 use console::Term;
 use fieldx_plus::fx_plus;
@@ -20,6 +19,10 @@ use num_format::Format;
 use num_format::Locale;
 use num_format::SystemLocale;
 use num_format::ToFormattedString;
+
+use crate::test::types::simerr;
+use crate::test::types::Result;
+use crate::test::types::SimErrorAny;
 
 use super::ScriptWriter;
 
@@ -103,7 +106,7 @@ pub enum TaskStatus {
     Busy,
 }
 
-#[fx_plus(child(ScriptWriter, unwrap(map(anyhow::Error, no_scenario))), sync, rc)]
+#[fx_plus(child(ScriptWriter, unwrap(or_else(SimErrorAny, no_scenario))), sync, rc)]
 pub struct Reporter {
     #[fieldx(private, lock, get, get_mut, builder(off), default(Vec::new()))]
     task_status: Vec<TaskStatus>,
@@ -163,18 +166,18 @@ impl Reporter {
         console::user_attended()
     }
 
-    fn no_scenario(&self) -> anyhow::Error {
-        anyhow::anyhow!("Scenario object is gone!")
+    fn no_scenario(&self) -> SimErrorAny {
+        simerr!("Scenario object is gone!")
     }
 
-    pub fn start(&self) -> anyhow::Result<()> {
+    pub fn start(&self) -> Result<()> {
         self.term().clear_screen().unwrap();
         self.term().hide_cursor().unwrap();
         self.set_shutdown(false);
         if self.user_attended() {
             let myself = self
                 .myself()
-                .ok_or(anyhow::anyhow!("Failed to get myself for reporter object"))?;
+                .ok_or(simerr!("Failed to get myself for reporter object"))?;
             self.set_refresher_handler(
                 thread::Builder::new()
                     .name("refresher".to_string())
@@ -185,11 +188,11 @@ impl Reporter {
         Ok(())
     }
 
-    pub fn stop(&self) -> anyhow::Result<()> {
+    pub fn stop(&self) -> Result<()> {
         self.set_shutdown(true);
         if let Some(handle) = self.clear_refresher_handler() {
             if let Err(err) = handle.join() {
-                eprintln!("Screen updater thread failed: {:?}", err);
+                eprintln!("Screen updater thread failed: {err:?}");
             }
         }
         self.term().show_cursor().unwrap();
@@ -236,7 +239,7 @@ impl Reporter {
         }
         else {
             for msg in messages {
-                println!("{}", msg);
+                println!("{msg}");
             }
         }
         Ok(())
@@ -269,7 +272,7 @@ impl Reporter {
         }
         else {
             for line in status_lines {
-                println!("{}", line);
+                println!("{line}");
             }
         }
 

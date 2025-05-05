@@ -20,7 +20,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Customers::Email).string().not_null())
                     .col(ColumnDef::new(Customers::FirstName).string().not_null())
                     .col(ColumnDef::new(Customers::LastName).string().not_null())
-                    .col(ColumnDef::new(Customers::RegisteredOn).timestamp().not_null())
+                    .col(ColumnDef::new(Customers::RegisteredOn).integer().not_null())
                     .index(Index::create().name("idx-unique-email").col(Customers::Email).unique())
                     .to_owned(),
             )
@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(Iden)]
-enum Customers {
+pub enum Customers {
     Table,
     Id,
     Email,

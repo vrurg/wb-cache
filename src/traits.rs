@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use std::{
-    fmt::{Debug, Display},
-    hash::Hash,
-};
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::hash::Hash;
+use tokio_stream::Stream;
 
 // For types that are in charge of reading/writing records.
 #[async_trait]
@@ -20,7 +20,7 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
     // In the future the method might return a list of instructions for the cache on how to act upon modified keys.
     async fn write_back(
         &self,
-        updates: impl Iterator<Item = (Self::Key, Self::CacheUpdate)> + Send,
+        updates: impl Stream<Item = (Self::Key, Self::CacheUpdate)> + Send,
     ) -> Result<(), Self::Error>;
     async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<Option<Self::CacheUpdate>, Self::Error>;
     async fn on_delete(&self, key: &Self::Key) -> Result<Option<Self::CacheUpdate>, Self::Error>;
@@ -31,20 +31,19 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
         old_value: Self::Value,
         prev_handler: Option<Self::CacheUpdate>,
     ) -> Result<Option<Self::CacheUpdate>, Self::Error>;
+    fn primary_key_of(&self, value: &Self::Value) -> Self::Key;
+
+    /// Returns a list of secondary keys for the given value.
+    /// Default implementation returns an empty vector.
+    fn secondary_keys_of(&self, _value: &Self::Value) -> Vec<Self::Key> {
+        Vec::new()
+    }
 
     // The following implementations cover plain, non-enum, key.
 
     // Take any key and return corresponding primary.
     async fn get_primary_key_for(&self, key: &Self::Key) -> Result<Option<Self::Key>, Self::Error> {
         Ok(Some(key.clone()))
-    }
-
-    fn primary_key_of(&self, key: &Self::Key, _value: &Self::Value) -> Self::Key {
-        key.clone()
-    }
-
-    fn secondary_keys_of(&self, _key: &Self::Key, _value: &Self::Value) -> Vec<Self::Key> {
-        vec![]
     }
 
     fn is_primary(&self, _key: &Self::Key) -> bool {
@@ -60,5 +59,19 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
     ) -> Result<Option<Self::CacheUpdate>, Self::Error> {
         // log::debug!("default DC on_access for '{_key}'");
         Ok(prev_update)
+    }
+}
+
+#[async_trait]
+pub trait WBObserver<DC>: Send + Sync + 'static
+where
+    DC: WBDataController,
+{
+    async fn on_flush(&self) -> Result<(), DC::Error> {
+        Ok(())
+    }
+
+    async fn on_flush_one(&self, _update: &DC::CacheUpdate) -> Result<(), DC::Error> {
+        Ok(())
     }
 }

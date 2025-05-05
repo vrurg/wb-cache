@@ -1,11 +1,11 @@
-use anyhow::anyhow;
-use anyhow::Result;
 use fieldx::fxstruct;
 use rand_distr::Distribution;
 use rand_distr::Gamma;
 use rand_distr::Poisson;
 
 use crate::test::db::entity::Customer as DbCustomer;
+use crate::test::types::simerr;
+use crate::test::types::Result;
 
 #[derive(Clone, Debug)]
 #[fxstruct(no_new, builder(post_build), get)]
@@ -15,7 +15,7 @@ pub struct Customer {
     pub first_name:    String,
     pub last_name:     String,
     pub email:         String,
-    #[fieldx(copy, default(-1))]
+    #[fieldx(copy, set, default(-1))]
     pub registered_on: i32,
 
     #[fieldx(copy)]
@@ -51,11 +51,13 @@ impl Customer {
         }
         Ok(Poisson::new(lambda)
             .map_err(|err| {
-                anyhow!("Poisson(lambda={lambda}): {}", err).context(format!(
+                let err = simerr!("Poisson(lambda={lambda}): {}", err);
+                err.context(format!(
                     "Customer EQ: {}; orders per day: {}",
                     self.erratic_quotient(),
                     self.orders_per_day()
-                ))
+                ));
+                err
             })?
             .sample(&mut rng) as f64)
     }

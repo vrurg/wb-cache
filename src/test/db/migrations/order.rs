@@ -18,8 +18,24 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(Orders::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Orders::CustomerId).integer().not_null())
-                    .col(ColumnDef::new(Orders::Total).decimal().not_null())
+                    .col(ColumnDef::new(Orders::ProductId).integer().not_null())
+                    .col(ColumnDef::new(Orders::Quantity).integer().not_null())
+                    .col(ColumnDef::new(Orders::Status).string().not_null())
                     .col(ColumnDef::new(Orders::PurchasedOn).integer().not_null())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-orders-customer_id")
+                            .from(Orders::Table, Orders::CustomerId)
+                            .to(super::customer::Customers::Table, super::customer::Customers::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk-orders-product_id")
+                            .from(Orders::Table, Orders::ProductId)
+                            .to(super::product::Products::Table, super::product::Products::Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -43,10 +59,12 @@ impl MigrationTrait for Migration {
 }
 
 #[derive(Iden)]
-enum Orders {
+pub enum Orders {
     Table,
     Id,
     CustomerId,
-    Total,
+    ProductId,
+    Quantity,
+    Status,
     PurchasedOn,
 }

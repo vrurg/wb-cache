@@ -10,16 +10,16 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::anyhow;
-use anyhow::Result;
 use console::style;
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use entity::customer::Customer;
 use entity::inventory::IncomingShipment;
+use entity::inventory::InventoryCheck;
 use entity::inventory::InventoryRecord;
 use entity::order::Order;
 use entity::product::Product;
@@ -29,21 +29,31 @@ use fieldx_plus::fx_plus;
 use model::customer::CustomerModel;
 use model::product::ProductModel;
 use rand::Rng;
+use rand_distr::Bernoulli;
 use rand_distr::Distribution;
 use rand_distr::Geometric;
+use rand_distr::Normal;
 use rand_distr::Poisson;
 use reporter::Reporter;
 use reporter::TaskStatus;
 use rnd_pool::RndPool;
+use sea_orm::prelude::Uuid;
+use steps::ScriptTitle;
 use steps::Step;
-use uuid::Uuid;
 
 use super::db::entity::Order as DbOrder;
+use super::db::entity::Session as DbSession;
+use super::types::simerr;
 use super::types::OrderStatus;
+use super::types::Result;
+use super::types::SimErrorAny;
 
 thread_local! {
     static BATCH_STEPS: RefCell<Vec<Step>> = const { RefCell::new(Vec::new()) };
 }
+
+const LOGIN_EXPIRE_DAYS: i32 = 7;
+const SESSION_FACTOR: usize = 10;
 
 enum AddPostProc {
     // Backorders for the product ID.
@@ -51,6 +61,7 @@ enum AddPostProc {
     BackorderAgain(u32),
     /// Pending until the specified day.
     Pending(u32),
+    Shipping(DbOrder),
     None,
 }
 
@@ -62,6 +73,8 @@ enum TaskData {
     Returns,
     /// Fulfill pending orders. Takes list of order indices in the steps array.
     Pending(Vec<usize>),
+    /// Generate temporary sessions for non-login visitors.
+    Sessions,
 }
 
 #[derive(Clone, Debug)]
@@ -93,7 +106,7 @@ impl TaskResult {
 }
 
 /// Generate a scenario to be executed by the Company simulator.
-#[fx_plus(parent, sync, rc, builder(error(anyhow::Error), post_build, opt_in))]
+#[fx_plus(parent, sync, rc, builder(error(SimErrorAny), post_build, opt_in))]
 pub struct ScriptWriter {
     /// For how many days the scenario will run.
     #[fieldx(default(365), builder)]
@@ -211,6 +224,15 @@ pub struct ScriptWriter {
 
     #[fieldx(lock, clearer, get(copy), set, builder(off))]
     track_product: usize,
+
+    next_session_id: AtomicI64,
+
+    // Base number to form session IDs. It has the format of <current_day> * 10^<number_of_digits_in_market_capacity>.
+    #[fieldx(lazy, private, clearer, get(copy), builder(off))]
+    session_base: i64,
+
+    #[fieldx(lazy, inner_mut, get, get_mut, builder(off))]
+    customer_sessions: Vec<Option<DbSession>>,
 }
 
 impl ScriptWriter {
@@ -235,21 +257,31 @@ impl ScriptWriter {
     pub fn direct(&self) -> Result<()> {
         self.reporter().start()?;
 
+        self.add_step(Step::Title(ScriptTitle {
+            period:          self.period,
+            products:        self.product_count(),
+            market_capacity: self.market_capacity,
+        }))?;
+
         self.init_products()?;
         self.register_customers()?;
         self.order_shipments(true)?;
 
         for day in 1..=self.period {
             self.set_current_day(day);
+            self.clear_session_base();
             self.add_step(Step::Day(day))?;
+            let sessions_task = self.submit_task(TaskData::Sessions)?;
             self.replenish_inventory()?;
-            self.fullfill_pending()?;
+            self.fulfill_pending()?;
             self.register_customers()?;
             self.process_returns()?;
             self.place_orders()?;
 
             // The end of the day processing.
             self.order_shipments(false)?;
+            sessions_task.wait()?;
+            self.add_step(Step::CollectSessions)?;
             self.log_progress()?;
         }
 
@@ -301,7 +333,15 @@ impl ScriptWriter {
             for customer in task.customers.iter() {
                 let customer_purchases = customer.daily_purchases()?;
                 expected_steps += customer_purchases as usize;
-                crecords.push((customer, customer_purchases))
+                crecords.push((customer, customer_purchases));
+
+                // If the customer is likely to purchase today, then we need to refresh their session.
+                // Otherwise, we simulate a scenario where the customer visits to check if they are interested.
+                // This is based on their expected daily purchases, so customers with an expectation of 1 or more
+                // are more likely to visit every day.
+                if customer_purchases > 0.0 || Bernoulli::new(1.0 - (-customer_purchases).exp()).unwrap().sample(&mut rng) {
+                    self.customer_login(customer.id())?;
+                }
             }
 
             let mut total_purchases = 0;
@@ -321,6 +361,12 @@ impl ScriptWriter {
                 let mut purchases = 0;
 
                 for (product_id, product_interest) in task.product_interests.iter() {
+
+                    // The customer may want to see the product page before ordering it.
+                    if rng.random_range(0.0..1.0) <= self.products()[*product_id as usize].view_probability() {
+                        batch_steps.push(Step::ViewProduct(*product_id));
+                    }
+
                     let product_items = Poisson::new(customer_purchases * product_interest)
                         .unwrap()
                         .sample(&mut rng)
@@ -361,7 +407,7 @@ impl ScriptWriter {
 
             if batch_steps.capacity() > init_capacity {
                 self.reporter().out(format!(
-                    "Thread {}: Step capacity increased from {} to {} (expected purchases: {}, total purchases: {}, batch steps: {})",
+                    "Thread {}: Purchase task steps capacity increased from {} to {} (expected steps: {}, total steps: {}, batch steps: {})",
                     thread_id,
                     init_capacity,
                     batch_steps.capacity(),
@@ -424,10 +470,42 @@ impl ScriptWriter {
         })
     }
 
+    fn next_session_id(&self) -> i64 {
+        self.next_session_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + self.session_base()
+    }
+
+    fn task_sessions(&self) -> Result<()> {
+        // Non-login sessions are those where a user visited the site but did not register or log in.  In such cases, a
+        // new session is always created; however, it is short-lived with an expiration set to the next day.  The
+        // expected number of temporary sessions depends on site popularity, which is measured by the number of existing
+        // customers.  Anticipated traffic is customer_count * 10, roughly equivalent to a 10% conversion rate from
+        // advertising—an unrealistically good value.
+        // Sessions are added one by one to intersperse them with other steps.
+
+        let day = self.current_day() as i32;
+        let anticipated_sessions = (self.customers().len() * SESSION_FACTOR) as f64;
+        let sigma = anticipated_sessions * 0.2;
+
+        let todays_sessions = Normal::new(anticipated_sessions, sigma)
+            .map_err(|err| simerr!("Normal distribution: {}", err))?
+            .sample(&mut rand::rng())
+            .round() as u32;
+
+        for _ in 0..todays_sessions {
+            self.add_step(Step::AddSession(DbSession {
+                id:          self.next_session_id(),
+                customer_id: None,
+                expires_on:  day + 3,
+            }))?;
+        }
+
+        Ok(())
+    }
+
     fn task_worker(&self, thread_id: usize, rx: Receiver<Task>) -> Result<()> {
         let thread_name = thread::current()
             .name()
-            .ok_or(anyhow!("Worker thread must have a name"))?
+            .ok_or(simerr!("Worker thread must have a name"))?
             .to_owned();
 
         loop {
@@ -446,8 +524,11 @@ impl ScriptWriter {
                     TaskData::Purchase(ref p_task) => self.task_purchases(p_task),
                     TaskData::Returns => self.task_returns(),
                     TaskData::Pending(ref p_task) => self.task_pending(p_task),
+                    TaskData::Sessions => self.task_sessions(),
                 }
-                .map_err(|err| err.context(format!("Task worker {} failed", thread_name))),
+                .inspect_err(|err| {
+                    err.context(format!("task worker {thread_name}"));
+                }),
             )?;
 
             self.reporter().set_task_status(thread_id, TaskStatus::Idle);
@@ -461,7 +542,7 @@ impl ScriptWriter {
         reporter.set_scenario_lines(self.steps().len());
         let total_backordered = self.total_backordered();
         reporter.set_backorders(total_backordered);
-        let total_pending = self.pending_orders().iter().map(|(_, queue)| queue.len()).sum();
+        let total_pending = self.pending_orders().values().map(|queue| queue.len()).sum();
         reporter.set_pending_orders(total_pending);
         if total_backordered > 100_000 {
             // Categorize by product ID and sort by the amount.
@@ -489,10 +570,11 @@ impl ScriptWriter {
 
         let mut check_steps = vec![];
         for inv_rec in self.inventory().iter() {
-            check_steps.push(Step::CheckInventory {
-                product_id: inv_rec.product_id(),
-                stock:      inv_rec.stock(),
-            });
+            check_steps.push(Step::CheckInventory(InventoryCheck::new(
+                inv_rec.product_id(),
+                inv_rec.stock(),
+                "daily",
+            )));
         }
         self.add_steps(check_steps)?;
 
@@ -519,20 +601,22 @@ impl ScriptWriter {
         }
     }
 
-    fn process_order(&self, mut step: Step, inventory: &mut [InventoryRecord]) -> Result<(Step, AddPostProc)> {
-        let (order, new_order) = match step {
-            Step::AddOrder(ref mut order) => (order, true),
-            Step::UpdateOrder(ref mut order) => (order, false),
-            _ => return Err(anyhow!("Non-order step submitted for order processing: {:?}", step)),
+    fn process_order(&self, mut step: Step) -> Result<(Step, AddPostProc)> {
+        let order = match step {
+            Step::AddOrder(ref mut order) | Step::UpdateOrder(ref mut order) => order,
+            _ => return Err(simerr!("Non-order step submitted for order processing: {:?}", step)),
         };
 
         let mut post_proc = AddPostProc::None;
 
-        if order.status == OrderStatus::New {
+        if order.status == OrderStatus::New || order.status == OrderStatus::Recheck {
+            let new_order = order.status == OrderStatus::New;
+            let mut inventory = self.inventory_mut();
             let Some(inv_rec) = inventory.get_mut(order.product_id as usize)
             else {
-                return Err(anyhow!("Product {} not found in inventory", order.product_id));
+                return Err(simerr!("Product {} not found in inventory", order.product_id));
             };
+
             if inv_rec.stock() < order.quantity {
                 // Not enough stock, mark the order as backordered.
                 order.status = OrderStatus::Backordered;
@@ -544,9 +628,9 @@ impl ScriptWriter {
                 }
             }
             else {
+                order.status = OrderStatus::Pending;
                 if inv_rec.handling_days() > 0 {
                     // If this inventory entry requires extra processing then the order goes into the pending queue.
-                    order.status = OrderStatus::Pending;
                     post_proc = AddPostProc::Pending(self.current_day() + inv_rec.handling_days() as u32);
                     // self.pending_orders_mut()
                     //     .entry(self.current_day() + inv_rec.handling_days() as i32)
@@ -554,8 +638,11 @@ impl ScriptWriter {
                     //     .push_back(order.clone());
                 }
                 else {
-                    // Same-day shipping.
-                    order.status = OrderStatus::Shipped;
+                    // Same-day shipping: a pending step is still needed because the warehouse must process the request
+                    // before dispatch, so a post-processing step is added to proceed with the shipment.
+                    let mut shipping_order = order.clone();
+                    shipping_order.status = OrderStatus::Shipped;
+                    post_proc = AddPostProc::Shipping(shipping_order);
                 }
                 // Either way, the stock gets reduced.
                 *inv_rec.stock_mut() -= order.quantity;
@@ -573,7 +660,6 @@ impl ScriptWriter {
     fn add_steps<S: IntoIterator<Item = Step>>(&self, new_steps: S) -> Result<()> {
         let mut steps = self.steps_mut();
         self.adjust_capacity(&mut *steps, 10_000);
-        let mut inventory = self.inventory_mut();
 
         // List of backordered orders as a tuple of product ID and the position in the steps vector.
         let mut backordered_new: Vec<(u32, usize)> = Vec::new();
@@ -585,7 +671,7 @@ impl ScriptWriter {
             let mut post_proc = AddPostProc::None;
             match step {
                 Step::AddOrder(_) | Step::UpdateOrder(_) => {
-                    (step, post_proc) = self.process_order(step, &mut inventory)?;
+                    (step, post_proc) = self.process_order(step)?;
                 }
                 _ => (),
             }
@@ -602,6 +688,15 @@ impl ScriptWriter {
                 }
                 AddPostProc::BackorderAgain(product_id) => {
                     backordered_again.push((product_id, step_idx));
+                }
+                AddPostProc::Shipping(shipping_order) => {
+                    // let inv_rec = inventory.get_mut(shipping_order.product_id as usize).unwrap();
+                    // steps.push(Step::CheckInventory(InventoryCheck::new(
+                    //     shipping_order.product_id,
+                    //     inv_rec.stock(),
+                    //     "same day shipping",
+                    // )));
+                    steps.push(Step::UpdateOrder(shipping_order));
                 }
                 AddPostProc::None => (),
             }
@@ -657,7 +752,7 @@ impl ScriptWriter {
             let supplier_tardiness = random_pool.next_rand() * 1.6 - 0.9;
             let product = Product::builder()
                 .id(id)
-                .name(format!("Product {}", id))
+                .name(format!("Product {id}"))
                 .price(price)
                 .daily_quotient(daily_quotient)
                 .expected_return_rate(expected_return_rate)
@@ -708,6 +803,28 @@ impl ScriptWriter {
             customer_counts.push_back(self.customers().len() as u32);
         }
 
+        Ok(())
+    }
+
+    fn customer_login(&self, customer_id: u32) -> Result<()> {
+        let sess_idx = customer_id as usize - 1;
+        if let Some(existing_session) = &mut self.customer_sessions_mut()[sess_idx] {
+            if existing_session.expires_on >= self.current_day() as i32 {
+                // Session is still valid, no need to create a new one but extend the expiration date.
+                existing_session.expires_on = self.current_day() as i32 + LOGIN_EXPIRE_DAYS;
+                self.add_step(Step::UpdateSession(existing_session.clone()))?;
+                return Ok(());
+            }
+        }
+
+        // A new session.
+        let session = DbSession {
+            id:          self.next_session_id(),
+            customer_id: Some(customer_id),
+            expires_on:  self.current_day() as i32 + LOGIN_EXPIRE_DAYS,
+        };
+        self.customer_sessions_mut()[customer_id as usize - 1] = Some(session.clone());
+        self.add_step(Step::AddSession(session))?;
         Ok(())
     }
 
@@ -829,20 +946,28 @@ impl ScriptWriter {
 
         if let Some(shipments) = all_shipments.remove(&self.current_day()) {
             let mut inventory = self.inventory_mut();
-            let mut backorders = self.backorders_mut();
+            let mut affected_products = vec![false; self.product_count() as usize];
             for shipment in shipments {
                 let product = products.get(shipment.product_id() as usize).unwrap();
                 let product_id = product.id() as usize;
                 let batch_size = shipment.batch_size();
                 let inv_rec = inventory.get_mut(product_id).unwrap();
-                let mut new_stock = inv_rec.stock() + batch_size;
+
+                affected_products[product_id] = true;
+
+                // inv_steps.push(Step::CheckInventory(InventoryCheck::new(
+                //     shipment.product_id(),
+                //     inv_rec.stock(),
+                //     "pre-incoming shipment",
+                // )));
+
+                let new_stock = inv_rec.stock() + batch_size;
                 *inv_rec.stock_mut() = new_stock;
 
                 if let Some(tracked_product) = self.track_product() {
                     if tracked_product == product_id {
                         self.reporter().out(format!(
-                            "Arrived shipment for product {}: {} units, new stock: {}",
-                            product_id, batch_size, new_stock
+                            "Arrived shipment for product {product_id}: {batch_size} units, new stock: {new_stock}",
                         ))?;
                     }
                 }
@@ -855,6 +980,12 @@ impl ScriptWriter {
                     batch_size: shipment.batch_size(),
                 }));
 
+                // inv_steps.push(Step::CheckInventory(InventoryCheck::new(
+                //     shipment.product_id(),
+                //     new_stock,
+                //     "post-incoming shipment",
+                // )));
+
                 // self.report(format!(
                 //     "[day {}] Arrived shipment for product {}: {} units",
                 //     self.current_day(),
@@ -864,31 +995,6 @@ impl ScriptWriter {
 
                 *self.product_shipping_mut().get_mut(&product.id()).unwrap() -= shipment.batch_size();
 
-                if let Some(orders) = backorders.get_mut(product_id) {
-                    // if orders.len() > 0 {
-                    //     self.report(format!(
-                    //         "Processing {} backorders for product {}",
-                    //         orders.len(),
-                    //         product_id
-                    //     ))?;
-                    // }
-                    while !orders.is_empty() {
-                        let mut order = self.order_by_idx(*orders.front().unwrap())?;
-                        if order.quantity <= new_stock {
-                            new_stock -= order.quantity;
-                            // The order can be fulfilled, remove it from the backorder queue.
-                            let _ = orders.pop_front().unwrap();
-                            order.status = OrderStatus::New;
-                            // Submit backordered order for processing.
-                            inv_steps.push(Step::UpdateOrder(order));
-                        }
-                        else {
-                            // Not enough stock to fulfill the order, leave it in the backorder queue.
-                            break;
-                        }
-                    }
-                }
-
                 // // Put what's left of the arrived batch after fulfilling backorders into the inventory.
                 // // Tell the executor to match the inventory with the expected value. This is useful for testing purposes
                 // // to ensure that scenario is in sync with the simulation.
@@ -896,6 +1002,48 @@ impl ScriptWriter {
                 //     product_id: product_id as u32,
                 //     stock:      new_stock,
                 // }));
+            }
+
+            for (product_id, updated) in affected_products.iter().enumerate() {
+                if *updated {
+                    let mut backorders = self.backorders_mut();
+
+                    if let Some(orders) = backorders.get_mut(product_id) {
+                        // if orders.len() > 0 {
+                        //     self.report(format!(
+                        //         "Processing {} backorders for product {}",
+                        //         orders.len(),
+                        //         product_id
+                        //     ))?;
+                        // }
+                        let inv_rec = &inventory[product_id];
+
+                        while !orders.is_empty() {
+                            let mut order = self.order_by_idx(*orders.front().unwrap())?;
+
+                            if order.product_id != product_id as u32 {
+                                return Err(simerr!(
+                                    "Backorder {} product ID {} does not match the shipment's product ID {}",
+                                    order.id,
+                                    order.product_id,
+                                    product_id
+                                ));
+                            }
+
+                            if order.quantity <= inv_rec.stock() {
+                                // The order can be fulfilled, remove it from the backorder queue.
+                                let _ = orders.pop_front().unwrap();
+                                order.status = OrderStatus::Recheck;
+                                // Submit backordered order for processing.
+                                inv_steps.push(Step::UpdateOrder(order));
+                            }
+                            else {
+                                // Not enough stock to fulfill the order, leave it in the backorder queue.
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -910,12 +1058,10 @@ impl ScriptWriter {
         //             .join("|"),
         // )?;
 
-        self.add_steps(inv_steps)?;
-
-        Ok(())
+        self.add_steps(inv_steps)
     }
 
-    fn fullfill_pending(&self) -> Result<()> {
+    fn fulfill_pending(&self) -> Result<()> {
         let mut pending_orders = self.pending_orders_mut();
 
         let Some(indicies) = pending_orders.remove(&self.current_day())
@@ -976,7 +1122,7 @@ impl ScriptWriter {
         for tr in task_results {
             if let Err(err) = tr.wait() {
                 self.reporter()
-                    .out(style(format!("Failed to process task: {}", err)).red().bright())?;
+                    .out(style(format!("Failed to process task: {err}")).red().bright())?;
                 succeed = false;
             }
         }
@@ -985,7 +1131,7 @@ impl ScriptWriter {
             Ok(())
         }
         else {
-            Err(anyhow!("Order processing was not successful"))
+            Err(simerr!("Order processing was not successful"))
         }
     }
 
@@ -1004,12 +1150,12 @@ impl ScriptWriter {
         let steps = self.steps();
         let Some(step) = steps.get(idx)
         else {
-            return Err(anyhow!("Step index {} not found", idx));
+            return Err(simerr!("Step index {} not found", idx));
         };
         Ok(match step {
             Step::AddOrder(ref order) => order,
             Step::UpdateOrder(ref order) => order,
-            _ => Err(anyhow!("Script step at index {} is not an order", idx))?,
+            _ => Err(simerr!("Script step at index {} is not an order", idx))?,
         }
         .clone())
     }
@@ -1029,14 +1175,14 @@ impl ScriptWriter {
             let rx = rx.clone();
             let myself = self.myself().unwrap();
             let task_handler = thread::Builder::new()
-                .name(format!("task_worker_{}", thread_id))
+                .name(format!("task_worker_{thread_id}"))
                 .spawn(move || {
                     let mut retry = 1;
                     while let Err(err) = myself.task_worker(thread_id, rx.clone()) {
-                        eprintln!("Task worker thread {} failed [{retry}]: {:?}", thread_id, err);
+                        eprintln!("Task worker thread {thread_id} failed [{retry}]: {err:?}");
                         retry += 1;
                         if retry > 3 {
-                            eprintln!("Task worker thread {} failed too many times, exiting", thread_id);
+                            eprintln!("Task worker thread {thread_id} failed too many times, exiting");
                             break;
                         }
                     }
@@ -1090,5 +1236,13 @@ impl ScriptWriter {
 
     fn build_product_price_model(&self) -> Arc<ProductModel> {
         ProductModel::builder().build().unwrap()
+    }
+
+    fn build_customer_sessions(&self) -> Vec<Option<DbSession>> {
+        vec![None; self.market_capacity() as usize]
+    }
+
+    fn build_session_base(&self) -> i64 {
+        self.current_day() as i64 * 10i64.pow((self.market_capacity() as i64 * SESSION_FACTOR as i64).ilog10() + 1)
     }
 }
