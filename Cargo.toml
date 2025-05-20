@@ -16,42 +16,55 @@
     path = "src/lib.rs"
 
 [dependencies]
-    anyhow            = { version = "1.0", optional = true, features = ["backtrace"] }
-    async-trait       = "0.1"
-    chrono            = { version = "0.4", optional = true }
-    clap              = { version = "4.5", optional = true, features = ["derive"] }
-    console           = { version = "0.15", optional = true }
-    crossbeam         = { version = "0.8", optional = true }
-    crossterm         = { version = "0.29", optional = true }
-    fake              = { version = "4.2", features = ["email_address"], optional = true }
-    fieldx            = { path = "../fieldx/fieldx/", features = ["async", "sync", "serde", "send_guard"] }
-    fieldx_plus       = { path = "../fieldx_plus/core/", features = ["async", "sync", "serde", "send_guard"] }
-    garde             = { version = "0.22", optional = true, features = ["derive"] }
-    indicatif         = { version = "0.17", optional = true }
-    is-terminal       = { version = "0.4", optional = true }
-    moka              = { version = "0.12", features = ["future", "log"] }
-    num-format        = { version = "0.4", optional = true, features = ["with-system-locale"] }
-    num_cpus          = { version = "1.16", optional = true }
-    parking_lot       = { version = "0.12", features = ["send_guard"], optional = true }
-    paste             = { version = "1.0", optional = true }
-    postcard          = { version = "1.1", features = ["use-std"], optional = true }
-    rand              = { version = "0.9", optional = true }
-    rand_distr        = { version = "0.5", optional = true }
-    sea-orm           = { version = "1.1.7", optional = true, features = ["sqlx-sqlite", "runtime-tokio", "debug-print"] }
-    sea-orm-macros    = { version = "1.1.7", optional = true }
-    sea-orm-migration = { version = "1.1.7", optional = true }
-    serde             = { version = "1.0", features = ["derive"], optional = true }
-    serde_json        = { version = "1.0", optional = true }
-    statrs            = { version = "0.18", optional = true, features = ["rand"] }
-    strum             = { version = "0.27", features = ["derive"], optional = true }
-    tempfile          = { version = "3.19", optional = true }
-    thiserror         = "2.0"
-    tokio             = { version = "1.44", features = ["rt-multi-thread", "macros", "time"] }
-    tokio-stream      = { version = "0.1", default-features = false }
-    zip               = { version = "2.6", optional = true }
+    anyhow                             = { version = "1.0", optional = true, features = ["backtrace"] }
+    async-trait                        = "0.1"
+    chrono                             = { version = "0.4", optional = true }
+    clap                               = { version = "4.5", optional = true, features = ["derive", "env"] }
+    console                            = { version = "0.15", optional = true }
+    crossbeam                          = { version = "0.8", optional = true }
+    crossterm                          = { version = "0.29", optional = true }
+    fake                               = { version = "4.2", features = ["email_address"], optional = true }
+    fieldx                             = { path = "../fieldx/fieldx/", features = ["async", "sync", "serde", "send_guard"] }
+    fieldx_plus                        = { path = "../fieldx_plus/core/", features = ["async", "sync", "serde", "send_guard"] }
+    garde                              = { version = "0.22", optional = true, features = ["derive"] }
+    indicatif                          = { version = "0.17", optional = true }
+    is-terminal                        = { version = "0.4", optional = true }
+    log                                = { version = "0.4", optional = true }
+    moka                               = { version = "0.12", features = ["future", "log"] }
+    num-format                         = { version = "0.4", optional = true, features = ["with-system-locale"] }
+    num_cpus                           = { version = "1.16", optional = true }
+    opentelemetry                      = { version = "*", optional = true, features = ["trace", "metrics"] }
+    opentelemetry-otlp                 = { version = "*", optional = true, features = ["metrics", "grpc-tonic"] }
+    opentelemetry-semantic-conventions = { version = "*", optional = true, features = ["semconv_experimental"] }
+    opentelemetry_sdk                  = { version = "*", optional = true, features = ["trace", "rt-tokio"] }
+    parking_lot                        = { version = "0.12", features = ["send_guard"], optional = true }
+    paste                              = { version = "1.0", optional = true }
+    postcard                           = { version = "1.1", features = ["use-std"], optional = true }
+    rand                               = { version = "0.9", optional = true }
+    rand_distr                         = { version = "0.5", optional = true }
+    sea-orm                            = { version = "1.1", optional = true, features = ["runtime-tokio", "debug-print", "macros"] }
+    sea-orm-macros                     = { version = "1.1", optional = true }
+    sea-orm-migration                  = { version = "1.1", optional = true }
+    serde                              = { version = "1.0", features = ["derive"], optional = true }
+    serde_json                         = { version = "1.0", optional = true }
+    statrs                             = { version = "0.18", optional = true, features = ["rand"] }
+    strum                              = { version = "0.27", features = ["derive"], optional = true }
+    tempfile                           = { version = "3.19", optional = true }
+    thiserror                          = "2.0"
+    tokio                              = { version = "1.44", features = ["rt-multi-thread", "macros", "time", "sync"] }
+    tokio-stream                       = { version = "0.1", default-features = false }
+    tracing                            = { version = "0.1", features = ["std", "attributes"] }
+    tracing-loki                       = { version = "0.2", optional = true }
+    tracing-opentelemetry              = { version = "0.30", optional = true }
+    tracing-subscriber                 = { version = "0.3", optional = true, features = ["env-filter", "fmt", "local-time", "std"] }
+    zip                                = { version = "2.6", optional = true }
 
 [features]
-    default = ["test"]
+    default = ["sqlite"]
+    log = ["dep:log"]
+    mysql = ["sea-orm/sqlx-mysql"]
+    pg = ["sea-orm/sqlx-postgres"]
+    sqlite = ["sea-orm/sqlx-sqlite"]
     test = [
         "dep:anyhow",
         "dep:chrono",
@@ -80,6 +93,18 @@
         "dep:tempfile",
         "dep:zip",
         "tokio/io-std",
+    ]
+    tracing = [
+        "log",
+        "dep:opentelemetry",
+        "dep:opentelemetry-otlp",
+        "dep:opentelemetry-semantic-conventions",
+        "dep:opentelemetry_sdk",
+        "dep:tracing-loki",
+        "dep:tracing-opentelemetry",
+        "dep:tracing-subscriber",
+        "tokio/tracing",
+        "tracing/max_level_trace",
     ]
 
 [dev-dependencies]

@@ -1,8 +1,10 @@
+use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use sea_orm::prelude::*;
 use sea_orm::DbErr;
 use sea_orm::DeriveActiveEnum;
 use sea_orm::EnumIter;
@@ -45,7 +47,7 @@ impl SimError {
         }
     }
 
-    pub fn report_with_backtrace<S: Display>(&self, msg: S) -> String {
+    pub fn report_with_backtrace<S: Display>(&self, msg: S) {
         match self {
             Self::Any(err) => err.report_with_backtrace(msg),
             Self::Sim(err) => err.report_with_backtrace(msg),
@@ -140,8 +142,12 @@ impl SimErrorAny {
         *error = err;
     }
 
-    pub fn report_with_backtrace<S: Display>(&self, msg: S) -> String {
-        format!("{msg}\n{}", self.0.read().backtrace())
+    pub fn report_with_backtrace<S: Display>(&self, msg: S) {
+        if env::var("RUST_BACKTRACE").is_ok() {
+            eprintln!("{msg}\n{}", self.0.read().backtrace());
+        } else {
+            eprintln!("{msg}");
+        }
     }
 }
 
@@ -153,7 +159,7 @@ impl Display for SimErrorAny {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "order_status")]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(20))")]
 pub enum OrderStatus {
     #[sea_orm(string_value = "New")]
     #[serde(rename = "n")]
@@ -182,5 +188,5 @@ pub struct Script {
     #[serde(rename = "l")]
     pub length: usize,
     #[serde(rename = "s")]
-    pub steps:  Vec<Step>,
+    pub steps: Vec<Step>,
 }

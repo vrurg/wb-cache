@@ -13,6 +13,7 @@ pub trait MaybeProgress {
     fn maybe_set_message(&self, msg: impl Into<Cow<'static, str>>);
     fn maybe_set_prefix(&self, prefix: impl Into<Cow<'static, str>>);
     fn maybe_set_position(&self, pos: u64);
+    fn maybe_per_sec(&self) -> f64;
 }
 
 impl MaybeProgress for Option<ProgressBar> {
@@ -49,8 +50,7 @@ impl MaybeProgress for Option<ProgressBar> {
     fn maybe_set_message(&self, msg: impl Into<Cow<'static, str>>) {
         if let Some(pb) = self {
             pb.set_message(msg);
-        }
-        else {
+        } else {
             println!("{}", msg.into());
         }
     }
@@ -58,8 +58,7 @@ impl MaybeProgress for Option<ProgressBar> {
     fn maybe_set_prefix(&self, prefix: impl Into<Cow<'static, str>>) {
         if let Some(pb) = self {
             pb.set_prefix(prefix);
-        }
-        else {
+        } else {
             println!("{}", prefix.into());
         }
     }
@@ -67,6 +66,14 @@ impl MaybeProgress for Option<ProgressBar> {
     fn maybe_set_position(&self, pos: u64) {
         if let Some(pb) = self {
             pb.set_position(pos);
+        }
+    }
+
+    fn maybe_per_sec(&self) -> f64 {
+        if let Some(pb) = self {
+            pb.per_sec()
+        } else {
+            0.0
         }
     }
 }
@@ -90,8 +97,7 @@ impl MaybeMultiProgress for Option<MultiProgress> {
         self.as_ref().map(|mp| {
             if let Some(before) = before {
                 mp.insert_before(before, pb)
-            }
-            else {
+            } else {
                 mp.add(pb)
             }
         })
@@ -101,12 +107,10 @@ impl MaybeMultiProgress for Option<MultiProgress> {
         if let Some(mp) = self {
             if let Some(after) = after {
                 Some(mp.insert_after(after, pb))
-            }
-            else {
+            } else {
                 Some(mp.add(pb))
             }
-        }
-        else {
+        } else {
             None
         }
     }

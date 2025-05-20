@@ -6,13 +6,14 @@ use fieldx_plus::fx_plus;
 use moka::Entry;
 use std::fmt::Debug;
 use std::sync::Arc;
+use tracing::instrument;
 
 #[fx_plus(child(WBCache<DC>, rc_strong), sync, default(off))]
 pub struct WBEntry<DC>
 where
     DC: WBDataController,
 {
-    key:   DC::Key,
+    key: DC::Key,
     value: DC::Value,
 }
 
@@ -32,6 +33,7 @@ where
     }
 
     // Only valid for primaries
+    #[instrument(level = "trace")]
     pub(crate) fn from_primary_entry(
         parent: &WBCache<DC>,
         entry: Entry<DC::Key, ValueState<DC::Key, DC::Value>>,
@@ -46,7 +48,8 @@ where
         .unwrap()
     }
 
-    pub async fn value(&self) -> Result<&DC::Value, DC::Error> {
+    #[instrument(level = "trace")]
+    pub async fn value(&self) -> Result<&DC::Value, Arc<DC::Error>> {
         self.parent().on_access(&self.key, &self.value).await
     }
 

@@ -3,6 +3,17 @@ use fieldx_plus::fx_plus;
 use fieldx_plus::Child;
 use std::fmt::Debug;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+
+// TODO! The data controller should be able to report back the status of the processed update. Currently, the
+// anticipated statuses are:
+//
+// - 'final' where the controller returns DC::CacheUpdate and the final DC::Value which can be sent back to the cache
+// - 'pending' which is the current behavior where the cache is not updated and only the .update field is refreshed
+//
+// The update object must be marked accordingly to the outcome of calling the data controller method. Later on,
+// maybe_flush would check the status of the update and decide whether to flush it or not. Eventually, this would allow
+// prevent any writes to the backend in cases where the final operation on the value is `delete`.
 
 // This struct is here to contain a key updating procedures withing single thread or task and to prevent the entire
 // cache object to block on `updates` HashMap locks. The point is that it may take a while for a data controller to
@@ -13,11 +24,8 @@ pub(crate) struct WBUpdateState<DC>
 where
     DC: WBDataController,
 {
-    #[fieldx(mode(async), vis(pub(crate)), clearer, predicate, writer, builder(off))]
-    pub(crate) update: DC::CacheUpdate,
-
-    #[fieldx(lock, set(private), default(false), builder(off))]
-    pub(crate) is_delete: bool,
+    #[fieldx(builder(off))]
+    pub(crate) data: Arc<RwLock<Option<DC::CacheUpdate>>>,
 }
 
 // !!! IMPORTANT NOTE TO MYSELF: never try to update parent's cache object here! We only take care of the single update
@@ -27,10 +35,10 @@ where
     DC: WBDataController + Send + Sync + 'static,
 {
     pub(crate) async fn on_new(&self, key: &DC::Key, value: DC::Value) -> Result<(), DC::Error> {
-        let mut guard = self.write_update().await;
+        let mut guard = self.data.write().await;
         let parent = self.parent();
         *guard = parent.data_controller().on_new(key, &value).await?;
-        self.set_is_delete(false);
+
         Ok(())
     }
 
@@ -40,32 +48,29 @@ where
         value: &DC::Value,
         old_value: DC::Value,
     ) -> Result<(), DC::Error> {
-        let mut guard = self.write_update().await;
+        let mut guard = self.data.write().await;
         let parent = self.parent();
         *guard = parent
             .data_controller()
             .on_change(key, value, old_value, guard.take())
             .await?;
-        self.set_is_delete(false);
         Ok(())
     }
 
     pub(crate) async fn on_access(&self, key: &DC::Key, value: &DC::Value) -> Result<(), DC::Error> {
         // log::debug!("UPDATE STATE ACCESS({key})");
-        let mut guard = self.write_update().await;
+        let mut guard = self.data.write().await;
         let parent = self.parent();
         // log::debug!("updating '{key}' with DC on_access");
         *guard = parent.data_controller().on_access(key, value, guard.take()).await?;
         // log::debug!("updated '{key}' with DC on_access");
-        self.set_is_delete(false);
         Ok(())
     }
 
     pub(crate) async fn on_delete(&self, key: &DC::Key) -> Result<(), DC::Error> {
-        let mut guard = self.write_update().await;
+        let mut guard = self.data.write().await;
         let parent = self.parent();
         *guard = parent.data_controller().on_delete(key).await?;
-        self.set_is_delete(true);
         Ok(())
     }
 }
@@ -75,6 +80,6 @@ where
     DC: WBDataController,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "WBUpdateState {{ {:?} }}", self.update)
+        write!(fmt, "WBUpdateState {{ {:?} }}", self.data)
     }
 }

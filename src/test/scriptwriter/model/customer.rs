@@ -51,7 +51,7 @@ impl CustomerModel {
         (self.market_capacity / self.initial_customers).powf(self.v()) - 1.0
     }
 
-    pub fn adjust_growth_rate(&self, expected_customers: f64, day: u32) {
+    pub fn adjust_growth_rate(&self, expected_customers: f64, day: i32) {
         let gr0 = 0.0;
         let gr1 = 0.1;
 
@@ -68,7 +68,7 @@ impl CustomerModel {
 
     /// Richards growth function
     /// https://en.wikipedia.org/wiki/Generalised_logistic_function
-    pub fn expected_customers(&self, t: u32) -> f64 {
+    pub fn expected_customers(&self, t: i32) -> f64 {
         let t = t as f64;
         self.market_capacity / (1.0 + self.q() * (-self.growth_rate() * t).exp()).powf(1.0 / self.v)
     }

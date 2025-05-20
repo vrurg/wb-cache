@@ -8,15 +8,15 @@ pub mod scriptwriter;
 pub mod sim_app;
 pub mod types;
 
+use std::fmt::Debug;
+
 use indicatif::ProgressBar;
 use progress::POrder;
 use progress::PStyle;
-use std::path::PathBuf;
 use types::simerr;
 use types::SimErrorAny;
 
-pub trait TestApp: Sync + Send + 'static {
-    fn db_dir(&self) -> Result<PathBuf, SimErrorAny>;
+pub trait TestApp: Debug + Sync + Send + 'static {
     fn acquire_progress<'a>(
         &'a self,
         style: PStyle,
@@ -26,4 +26,11 @@ pub trait TestApp: Sync + Send + 'static {
     fn app_is_gone() -> SimErrorAny {
         simerr!("App is gone")
     }
+    fn set_cached_per_sec(&self, step: f64);
+    fn set_plain_per_sec(&self, step: f64);
+
+    fn report_debug<S: ToString>(&self, msg: S);
+    fn report_info<S: ToString>(&self, msg: S);
+    fn report_warn<S: ToString>(&self, msg: S);
+    fn report_error<S: ToString>(&self, msg: S);
 }

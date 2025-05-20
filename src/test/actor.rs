@@ -1,11 +1,14 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use indicatif::ProgressBar;
 use sea_orm::prelude::*;
 use tokio::time::Instant;
+use tracing::instrument;
 
-use super::db::cache::DBConnectionProvider;
+use super::db::cache::DBProvider;
+use super::db::driver::DatabaseDriver;
 use super::db::entity::InventoryRecord;
 use super::db::prelude::*;
 use super::progress::traits::MaybeProgress;
@@ -15,13 +18,13 @@ use super::types::simerr;
 use super::types::SimError;
 
 #[async_trait]
-pub trait TestActor: DBConnectionProvider {
+pub trait TestActor: DBProvider + Debug {
     fn progress(&self) -> Result<Arc<Option<ProgressBar>>, SimError>;
-    fn current_day(&self) -> u32;
+    fn current_day(&self) -> i32;
     fn set_title(&self, title: &ScriptTitle) -> Result<(), SimError>;
     fn prelude(&self) -> Result<(), SimError>;
 
-    async fn set_current_day(&self, day: u32) -> Result<(), SimError>;
+    async fn set_current_day(&self, day: i32) -> Result<(), SimError>;
     async fn add_customer(&self, db: &DatabaseConnection, customer: &Customer) -> Result<(), SimError>;
     async fn add_inventory_record(
         &self,
@@ -34,26 +37,27 @@ pub trait TestActor: DBConnectionProvider {
     async fn check_inventory(
         &self,
         db: &DatabaseConnection,
-        product_id: u32,
-        stock: u32,
+        product_id: i32,
+        stock: i64,
         comment: &str,
     ) -> Result<(), SimError>;
     async fn update_inventory_record(
         &self,
         db: &DatabaseConnection,
-        product_id: u32,
+        product_id: i32,
         quantity: i64,
     ) -> Result<(), SimError>;
     async fn collect_sessions(&self, db: &DatabaseConnection) -> Result<(), SimError>;
     async fn update_order(&self, db: &DatabaseConnection, order: &Order) -> Result<(), SimError>;
-    async fn update_product_view_count(&self, db: &DatabaseConnection, product_id: u32) -> Result<(), SimError>;
+    async fn update_product_view_count(&self, db: &DatabaseConnection, product_id: i32) -> Result<(), SimError>;
     async fn update_session(&self, db: &DatabaseConnection, session: &Session) -> Result<(), SimError>;
+    async fn step_complete(&self, db: &DatabaseConnection, step_num: usize) -> Result<(), SimError>;
 
     fn inv_rec_compare(
         &self,
         inventory_record: &Option<InventoryRecord>,
-        product_id: u32,
-        stock: u32,
+        product_id: i32,
+        stock: i64,
         comment: &str,
     ) -> Result<(), SimError> {
         if let Some(inventory_record) = inventory_record {
@@ -67,18 +71,18 @@ pub trait TestActor: DBConnectionProvider {
                 )
                 .into());
             }
-        }
-        else {
+        } else {
             return Err(simerr!("Inventory record not found for product ID {}", product_id).into());
         }
 
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(screenplay))]
     async fn act(&self, screenplay: &[Step]) -> Result<(), SimError> {
         self.prelude()?;
 
-        let db = self.db_connection().await?;
+        let db = self.db_connection()?;
         let progress = self.progress()?;
 
         progress.maybe_set_length(screenplay.len() as u64);
@@ -91,7 +95,7 @@ pub trait TestActor: DBConnectionProvider {
             Err(simerr!("Screenplay must start with a title"))?;
         }
 
-        for step in screenplay.iter() {
+        for (step_num, step) in screenplay.iter().enumerate() {
             if err.is_err() {
                 if post_steps < 10 {
                     post_steps += 1;
@@ -101,7 +105,7 @@ pub trait TestActor: DBConnectionProvider {
             }
             if Instant::now().duration_since(checkpoint).as_secs() > 5 {
                 checkpoint = Instant::now();
-                db.execute_unprepared("PRAGMA wal_checkpoint;").await?;
+                self.db_driver()?.checkpoint().await?;
             }
 
             let step_name = format!("{step}");
@@ -135,23 +139,26 @@ pub trait TestActor: DBConnectionProvider {
             });
 
             progress.maybe_inc(1);
+            self.step_complete(&db, step_num).await?;
         }
 
-        self.curtain_call(&db).await?;
+        self.curtain_call().await?;
 
         Ok(())
     }
 
-    async fn curtain_call(&self, _db: &DatabaseConnection) -> Result<(), SimError> {
+    #[instrument(level = "trace", skip(self))]
+    async fn curtain_call(&self) -> Result<(), SimError> {
         Ok(())
     }
 
     /// Collect sessions that are older than the current day and have no customer ID
+    #[instrument(level = "trace", skip(self, db))]
     async fn collect_session_stubs(&self, db: &DatabaseConnection) -> Result<(), SimError> {
         let res = Sessions::delete_many()
             .filter(
                 super::db::entity::session::Column::ExpiresOn
-                    .lte(self.current_day() as i32)
+                    .lte(self.current_day())
                     .and(super::db::entity::session::Column::CustomerId.is_null()),
             )
             .exec(db)
@@ -159,8 +166,7 @@ pub trait TestActor: DBConnectionProvider {
 
         if res.rows_affected == 0 {
             self.progress()?.maybe_set_message("");
-        }
-        else {
+        } else {
             self.progress()?
                 .maybe_set_message(format!("Collected {} sessions", res.rows_affected));
         }

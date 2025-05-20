@@ -11,7 +11,7 @@ use crate::test::types::Result;
 #[fxstruct(no_new, builder(post_build), get)]
 pub struct Customer {
     #[fieldx(copy)]
-    pub id:            u32,
+    pub id:            i32,
     pub first_name:    String,
     pub last_name:     String,
     pub email:         String,

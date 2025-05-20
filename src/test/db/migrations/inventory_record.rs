@@ -17,10 +17,10 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(InventoryRecords::Stock).integer().not_null())
+                    .col(ColumnDef::new(InventoryRecords::Stock).big_integer().not_null())
                     .col(
                         ColumnDef::new(InventoryRecords::HandlingDays)
-                            .tiny_unsigned()
+                            .small_integer()
                             .not_null(),
                     )
                     .foreign_key(

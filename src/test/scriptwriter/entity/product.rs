@@ -11,7 +11,7 @@ use crate::test::scriptwriter::model::product::ProductModel;
 #[fxstruct(sync, no_new, builder, get(copy))]
 pub struct Product {
     /// Unique product ID
-    id:                   u32,
+    id:                   i32,
     /// Product name
     #[fieldx(get(copy(off)))]
     name:                 String,

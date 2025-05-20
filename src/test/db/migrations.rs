@@ -13,9 +13,9 @@ impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(customer::Migration),
+            Box::new(product::Migration),
             Box::new(inventory_record::Migration),
             Box::new(order::Migration),
-            Box::new(product::Migration),
             Box::new(session::Migration),
         ]
     }

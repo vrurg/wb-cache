@@ -7,10 +7,10 @@ use indicatif::ProgressBar;
 use sea_orm::prelude::*;
 use sea_orm::ActiveValue::Set;
 use sea_orm::IntoActiveModel;
-use sea_orm::Statement;
 
 use super::actor::TestActor;
-use super::db::cache::DBConnectionProvider;
+use super::db::cache::DBProvider;
+use super::db::driver::DatabaseDriver;
 use super::db::prelude::*;
 use super::progress::MaybeProgress;
 use super::progress::PStyle;
@@ -23,21 +23,31 @@ use super::TestApp;
 
 const WATCH_PRODUCT_ID: Option<i32> = None; // Some(1);
 
+macro_rules! watch_product {
+    ($record:expr, $( $msg:tt )+ ) => {
+        if WATCH_PRODUCT_ID.is_some_and(|id| id < 0 || id == $record.product_id) {
+            eprintln!( $( $msg )+ );
+        }
+    };
+}
+
+#[derive(Debug)]
 #[fx_plus(
     agent(APP, unwrap(or_else(SimErrorAny, <APP as TestApp>::app_is_gone()))),
     parent,
     fallible(off, error(SimErrorAny)),
+    default(off),
     sync
 )]
-pub struct TestCompany<APP: TestApp> {
+pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
     #[fieldx(copy, get("_current_day"), inner_mut, set("_set_current_day", private), default(0))]
-    current_day: u32,
+    current_day: i32,
 
     #[fieldx(lazy, get("_progress", private, clone), fallible)]
     progress: Arc<Option<ProgressBar>>,
 
-    #[fieldx(get(clone), builder(required))]
-    db: Arc<DatabaseConnection>,
+    #[fieldx(get, builder(required))]
+    db: D,
 
     #[fieldx(inner_mut, get(copy), set, default(0))]
     inv_check_no: u32,
@@ -46,7 +56,7 @@ pub struct TestCompany<APP: TestApp> {
     updated_from: HashMap<Uuid, Order>,
 }
 
-impl<APP: TestApp> TestCompany<APP> {
+impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
     fn build_progress(&self) -> Result<Arc<Option<ProgressBar>>, SimErrorAny> {
         let app = self.app()?;
         let progress = app.acquire_progress(PStyle::Main, None)?;
@@ -58,12 +68,14 @@ impl<APP: TestApp> TestCompany<APP> {
         match order.status {
             OrderStatus::Backordered | OrderStatus::Refunded | OrderStatus::Shipped | OrderStatus::Recheck => (),
             _ => {
-                if WATCH_PRODUCT_ID.is_some_and(|id| id < 0 || id == order.product_id as i32) {
-                    eprintln!(
-                        "Updating inventory from order {}, status {:?}, product {}: {}",
-                        order.id, order.status, order.product_id, order.quantity
-                    );
-                }
+                watch_product!(
+                    order,
+                    "Updating inventory from order {}, status {:?}, product {}: {}",
+                    order.id,
+                    order.status,
+                    order.product_id,
+                    order.quantity
+                );
                 if self.updated_from().contains_key(&order.id) {
                     return Err(simerr!(
                         "Inventory already updated from order {:?}",
@@ -81,12 +93,13 @@ impl<APP: TestApp> TestCompany<APP> {
 }
 
 #[async_trait]
-impl<APP> TestActor for TestCompany<APP>
+impl<APP, D> TestActor for TestCompany<APP, D>
 where
     APP: TestApp,
+    D: DatabaseDriver,
 {
     fn prelude(&self) -> Result<(), SimError> {
-        self.progress()?.maybe_set_prefix("plain ");
+        self.progress()?.maybe_set_prefix("Plain ");
         Ok(())
     }
 
@@ -94,12 +107,12 @@ where
         Ok(self._progress()?)
     }
 
-    async fn set_current_day(&self, day: u32) -> Result<(), SimError> {
+    async fn set_current_day(&self, day: i32) -> Result<(), SimError> {
         self._set_current_day(day);
         Ok(())
     }
 
-    fn current_day(&self) -> u32 {
+    fn current_day(&self) -> i32 {
         self._current_day()
     }
 
@@ -109,7 +122,7 @@ where
 
     async fn add_customer(&self, db: &DatabaseConnection, customer: &Customer) -> Result<(), SimError> {
         let mut customer = customer.clone();
-        customer.registered_on = self.current_day() as i32;
+        customer.registered_on = self.current_day();
         Customers::insert(customer.into_active_model()).exec(db).await?;
         Ok(())
     }
@@ -131,28 +144,32 @@ where
     }
 
     async fn add_order(&self, db: &DatabaseConnection, order: &Order) -> Result<(), SimError> {
-        if WATCH_PRODUCT_ID.is_some_and(|id| id < 0 || id == order.product_id as i32) {
-            eprintln!(
-                "Adding order {} on product {}: {}, {:?}",
-                order.id, order.product_id, order.quantity, order.status
-            );
-        }
+        watch_product!(
+            order,
+            "Adding order {} on product {}: {}, {:?}",
+            order.id,
+            order.product_id,
+            order.quantity,
+            order.status
+        );
         self.update_inventory(db, order).await?;
 
         let mut order = order.clone();
-        order.purchased_on = self.current_day() as i32;
+        order.purchased_on = self.current_day();
         order.into_active_model().insert(db).await?;
 
         Ok(())
     }
 
     async fn update_order(&self, db: &DatabaseConnection, order: &Order) -> Result<(), SimError> {
-        if WATCH_PRODUCT_ID.is_some_and(|id| id < 0 || id == order.product_id as i32) {
-            eprintln!(
-                "Updating order {} on product {}: {}, {:?}",
-                order.id, order.product_id, order.quantity, order.status
-            );
-        }
+        watch_product!(
+            order,
+            "Updating order {} on product {}: {}, {:?}",
+            order.id,
+            order.product_id,
+            order.quantity,
+            order.status
+        );
         self.update_inventory(db, order).await?;
 
         let mut order_update = super::db::entity::order::ActiveModel::new();
@@ -166,11 +183,10 @@ where
     async fn update_inventory_record(
         &self,
         db: &DatabaseConnection,
-        product_id: u32,
+        product_id: i32,
         quantity: i64,
     ) -> Result<(), SimError> {
-        let Some(inventory_record) = InventoryRecords::find_by_id(product_id).one(db).await?
-        else {
+        let Some(inventory_record) = InventoryRecords::find_by_id(product_id).one(db).await? else {
             return Err(simerr!(
                 "Can't update non-existing inventory record for product ID: {}",
                 product_id
@@ -178,7 +194,7 @@ where
             .into());
         };
 
-        let new_stock = inventory_record.stock as i64 + quantity;
+        let new_stock = inventory_record.stock + quantity;
         if new_stock < 0 {
             return Err(simerr!(
                 "Not enough stock for product ID {}: need {}, but only {} remaining",
@@ -188,15 +204,16 @@ where
             )
             .into());
         }
-        if WATCH_PRODUCT_ID.is_some_and(|id| id < 0 || id == product_id as i32) {
-            eprintln!(
-                "Updating inventory record for product ID {} by {}: {} -> {}",
-                product_id, quantity, inventory_record.stock, new_stock
-            );
-        }
+        watch_product!(
+            inventory_record,
+            "Updating inventory record for product ID {}: {} -> {}",
+            product_id,
+            inventory_record.stock,
+            new_stock
+        );
         let mut inventory_record = inventory_record.into_active_model();
         inventory_record.product_id = Set(product_id);
-        inventory_record.stock = Set(new_stock as u32);
+        inventory_record.stock = Set(new_stock);
         inventory_record.update(db).await?;
 
         Ok(())
@@ -205,8 +222,8 @@ where
     async fn check_inventory(
         &self,
         db: &DatabaseConnection,
-        product_id: u32,
-        stock: u32,
+        product_id: i32,
+        stock: i64,
         comment: &str,
     ) -> Result<(), SimError> {
         let inventory_record = InventoryRecords::find_by_id(product_id).one(db).await?;
@@ -225,13 +242,15 @@ where
         Ok(())
     }
 
-    async fn update_product_view_count(&self, db: &DatabaseConnection, product_id: u32) -> Result<(), SimError> {
-        db.execute(Statement::from_sql_and_values(
-            db.get_database_backend(),
-            r#"UPDATE products SET views = views + 1 WHERE id = ?"#,
-            vec![Value::from(product_id)],
-        ))
-        .await?;
+    async fn update_product_view_count(&self, db: &DatabaseConnection, product_id: i32) -> Result<(), SimError> {
+        Products::update_many()
+            .col_expr(
+                super::db::entity::product::Column::Views,
+                sea_orm::sea_query::SimpleExpr::Custom("views + 1".to_string()),
+            )
+            .filter(super::db::entity::product::Column::Id.eq(product_id))
+            .exec(db)
+            .await?;
         Ok(())
     }
 
@@ -247,28 +266,37 @@ where
 
     async fn collect_sessions(&self, db: &DatabaseConnection) -> Result<(), SimError> {
         let res = Sessions::delete_many()
-            .filter(super::db::entity::session::Column::ExpiresOn.lte(self.current_day() as i32))
+            .filter(super::db::entity::session::Column::ExpiresOn.lte(self.current_day()))
             .exec(db)
             .await?;
 
         if res.rows_affected == 0 {
             self.progress()?.maybe_set_message("");
-        }
-        else {
+        } else {
             self.progress()?
                 .maybe_set_message(format!("Collected {} sessions", res.rows_affected));
         }
 
         Ok(())
     }
+
+    async fn step_complete(&self, _db: &DatabaseConnection, _step_num: usize) -> Result<(), SimError> {
+        self.app()?.set_plain_per_sec(self.progress()?.maybe_per_sec());
+        Ok(())
+    }
 }
 
 #[async_trait]
-impl<APP> DBConnectionProvider for TestCompany<APP>
+impl<APP, D> DBProvider for TestCompany<APP, D>
 where
     APP: TestApp,
+    D: DatabaseDriver,
 {
-    async fn db_connection(&self) -> Result<Arc<DatabaseConnection>, SimErrorAny> {
+    fn db_driver(&self) -> Result<&impl DatabaseDriver, SimErrorAny> {
         Ok(self.db())
+    }
+
+    fn db_connection(&self) -> Result<DatabaseConnection, SimErrorAny> {
+        Ok(self.db().connection())
     }
 }

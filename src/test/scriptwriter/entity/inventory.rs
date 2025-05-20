@@ -5,14 +5,14 @@ use serde::Serialize;
 #[derive(Clone, Debug)]
 #[fxstruct(no_new, builder, get(copy))]
 pub struct InventoryRecord {
-    product_id:    u32,
+    product_id:    i32,
     #[fieldx(get_mut)]
-    stock:         u32,
-    handling_days: u8,
+    stock:         i64,
+    handling_days: i16,
 }
 
 impl InventoryRecord {
-    pub fn new(product_id: u32, stock: u32, handling_days: u8) -> Self {
+    pub fn new(product_id: i32, stock: i64, handling_days: i16) -> Self {
         Self {
             product_id,
             stock,
@@ -35,24 +35,24 @@ impl From<InventoryRecord> for crate::test::db::entity::InventoryRecord {
 #[serde(deny_unknown_fields)]
 pub struct IncomingShipment {
     #[serde(rename = "p")]
-    pub product_id: u32,
+    pub product_id: i32,
     #[serde(rename = "b")]
-    pub batch_size: u32,
+    pub batch_size: i32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InventoryCheck {
     #[serde(rename = "p")]
-    pub product_id: u32,
+    pub product_id: i32,
     #[serde(rename = "s")]
-    pub stock:      u32,
+    pub stock:      i64,
     #[serde(rename = "c")]
     pub comment:    String,
 }
 
 impl InventoryCheck {
-    pub fn new<S: ToString>(product_id: u32, stock: u32, comment: S) -> Self {
+    pub fn new<S: ToString>(product_id: i32, stock: i64, comment: S) -> Self {
         Self {
             product_id,
             stock,

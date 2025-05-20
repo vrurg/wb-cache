@@ -41,6 +41,7 @@ pub enum POrder<'a> {
 pub enum PStyle {
     Main,
     Minor,
+    Message,
     Custom(ProgressStyle),
 }
 
@@ -49,6 +50,7 @@ impl Debug for PStyle {
         match self {
             PStyle::Main => write!(f, "Main"),
             PStyle::Minor => write!(f, "Minor"),
+            PStyle::Message => write!(f, "Message"),
             PStyle::Custom(_) => write!(f, "Custom"),
         }
     }
@@ -84,6 +86,9 @@ pub struct ProgressUI {
 
     #[fieldx(lazy, private, get(clone))]
     progress_style_minor: ProgressStyle,
+
+    #[fieldx(lazy, private, get(clone))]
+    progress_style_message: ProgressStyle,
 }
 
 impl ProgressUI {
@@ -94,8 +99,7 @@ impl ProgressUI {
     fn build_multi_progress(&self) -> Option<MultiProgress> {
         if self.user_attended() {
             Some(MultiProgress::new())
-        }
-        else {
+        } else {
             None
         }
     }
@@ -103,7 +107,7 @@ impl ProgressUI {
     #[inline(always)]
     fn build_progress_style_main(&self) -> ProgressStyle {
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise:.cyan}] [{eta:>4}] {percent_precise:>7}% {bar:30.cyan.on_240} {pos:>2.cyan}/{len:>2.cyan} {per_sec_short} ({prefix}) {msg:.cyan}")
+            .template("{prefix}: [{elapsed_precise:.cyan}] [{eta:>4}] {percent_precise:>7}% {bar:30.cyan.on_240} {pos:>2.cyan}/{len:>2.cyan} {per_sec_short} {msg:.cyan}")
             .expect("Main progress style")
             .with_key("per_sec_short", PerSecFmt)
             .progress_chars("█▉▊▋▌▍▎▏ ")
@@ -115,6 +119,13 @@ impl ProgressUI {
             .template("[{elapsed_precise}] {bar:5.250.on_240} {pos:>2}/{len:>2} ({prefix}) {msg}")
             .expect("Minor progress style")
             .progress_chars("█▉▊▋▌▍▎▏ ")
+    }
+
+    #[inline(always)]
+    fn build_progress_style_message(&self) -> ProgressStyle {
+        ProgressStyle::default_bar()
+            .template("{prefix}: {msg}")
+            .expect("Message progress style")
     }
 
     pub fn message_style(&self, msg_type: MsgType) -> Style {
@@ -130,8 +141,7 @@ impl ProgressUI {
         let prefix = self.message_style(msg_type).apply_to(format!("[{msg_type}]"));
         if matches!(msg_type, MsgType::Info) {
             println!("{prefix} {msg}");
-        }
-        else {
+        } else {
             eprintln!("{prefix} {msg}");
         }
     }
@@ -142,8 +152,7 @@ impl ProgressUI {
             mp.suspend(|| {
                 self._println(msg_type, msg);
             })
-        }
-        else {
+        } else {
             self._println(msg_type, msg);
         }
     }
@@ -168,6 +177,7 @@ impl ProgressUI {
         match style {
             PStyle::Main => self.progress_style_main(),
             PStyle::Minor => self.progress_style_minor(),
+            PStyle::Message => self.progress_style_message(),
             PStyle::Custom(custom) => custom,
         }
     }
@@ -190,8 +200,7 @@ impl ProgressUI {
                     mp.maybe_insert_after(after, ProgressBar::new_spinner().with_style(style.clone()))
                 }
             }
-        }
-        else {
+        } else {
             mp.maybe_add(ProgressBar::new(0).with_style(style.clone()))
         }
     }

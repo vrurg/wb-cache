@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,13 +7,13 @@ use sea_orm::entity::prelude::*;
 use sea_orm::IntoActiveModel;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio_stream::Stream;
 
 use crate::test::db::cache::CacheUpdates;
-use crate::test::db::cache::DBConnectionProvider;
+use crate::test::db::cache::DBProvider;
 use crate::test::db::cache::WBDCCommon;
 use crate::test::types::OrderStatus;
 use crate::test::types::SimErrorAny;
+use crate::update_iterator::WBUpdateIterator;
 use crate::WBDataController;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
@@ -21,15 +22,15 @@ use crate::WBDataController;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "i")]
-    pub id:           Uuid,
+    pub id: Uuid,
     #[serde(rename = "c")]
-    pub customer_id:  u32,
+    pub customer_id: i32,
     #[serde(rename = "p")]
-    pub product_id:   u32,
+    pub product_id: i32,
     #[serde(rename = "q")]
-    pub quantity:     u32,
+    pub quantity: i32,
     #[serde(rename = "s")]
-    pub status:       OrderStatus,
+    pub status: OrderStatus,
     // The day number when the order was purchased.
     #[serde(rename = "d")]
     pub purchased_on: i32,
@@ -56,22 +57,33 @@ impl ActiveModelBehavior for ActiveModel {}
 #[fx_plus(child(DBCP, rc_strong), sync, rc)]
 pub struct Manager<DBCP>
 where
-    DBCP: DBConnectionProvider, {}
+    DBCP: DBProvider, {}
 
 impl<DBCP> Manager<DBCP>
 where
-    DBCP: DBConnectionProvider,
+    DBCP: DBProvider,
 {
     pub async fn get_by_order_id(&self, order_id: Uuid) -> Result<Vec<Model>, SimErrorAny> {
-        let db = self.db_conn_provider().db_connection().await?;
-        Ok(Entity::find().filter(Column::Id.eq(order_id)).all(db.as_ref()).await?)
+        Ok(Entity::find()
+            .filter(Column::Id.eq(order_id))
+            .all(&self.db_provider().db_connection()?)
+            .await?)
+    }
+}
+
+impl<DBCP> Debug for Manager<DBCP>
+where
+    DBCP: DBProvider,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OrderManager")
     }
 }
 
 #[async_trait]
 impl<DBCP> WBDataController for Manager<DBCP>
 where
-    DBCP: DBConnectionProvider,
+    DBCP: DBProvider,
 {
     type CacheUpdate = CacheUpdates<ActiveModel>;
     type Error = SimErrorAny;
@@ -79,18 +91,16 @@ where
     type Value = Model;
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
-        let db = self.db_conn_provider().db_connection().await?;
-        Ok(Entity::find_by_id(*id).one(db.as_ref()).await?)
+        Ok(Entity::find_by_id(*id)
+            .one(&self.db_provider().db_connection()?)
+            .await?)
     }
 
     fn primary_key_of(&self, value: &Self::Value) -> Self::Key {
         value.id
     }
 
-    async fn write_back(
-        &self,
-        update_records: impl Stream<Item = (Self::Key, Self::CacheUpdate)> + Send,
-    ) -> Result<(), Self::Error> {
+    async fn write_back(&self, update_records: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error> {
         self.wbdc_write_back(update_records).await
     }
 
@@ -124,13 +134,9 @@ where
 
 impl<DBCP> WBDCCommon<Entity, DBCP> for Manager<DBCP>
 where
-    DBCP: DBConnectionProvider,
+    DBCP: DBProvider,
 {
-    fn delete_many_condition(
-        &self,
-        dm: sea_orm::DeleteMany<Entity>,
-        keys: Vec<Self::Key>,
-    ) -> sea_orm::DeleteMany<Entity> {
+    fn delete_many_condition(dm: sea_orm::DeleteMany<Entity>, keys: Vec<Self::Key>) -> sea_orm::DeleteMany<Entity> {
         dm.filter(Column::Id.is_in(keys))
     }
 }

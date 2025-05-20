@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
-use tokio_stream::Stream;
+use std::sync::Arc;
+
+use crate::update_iterator::WBUpdateIterator;
 
 // For types that are in charge of reading/writing records.
 #[async_trait]
@@ -14,14 +16,11 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
     type Key: Debug + Display + Hash + Clone + Eq + Sized + Send + Sync + 'static;
     type Value: Debug + Clone + Send + Sync + 'static;
     type CacheUpdate: Debug + Send + Sync + 'static;
-    type Error: Display + Send + Sync + 'static;
+    type Error: Display + Debug + Send + Sync + 'static;
 
     async fn get_for_key(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error>;
     // In the future the method might return a list of instructions for the cache on how to act upon modified keys.
-    async fn write_back(
-        &self,
-        updates: impl Stream<Item = (Self::Key, Self::CacheUpdate)> + Send,
-    ) -> Result<(), Self::Error>;
+    async fn write_back(&self, updates: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error>;
     async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<Option<Self::CacheUpdate>, Self::Error>;
     async fn on_delete(&self, key: &Self::Key) -> Result<Option<Self::CacheUpdate>, Self::Error>;
     async fn on_change(
@@ -67,11 +66,13 @@ pub trait WBObserver<DC>: Send + Sync + 'static
 where
     DC: WBDataController,
 {
-    async fn on_flush(&self) -> Result<(), DC::Error> {
+    async fn on_flush(&self) -> Result<(), Arc<DC::Error>> {
         Ok(())
     }
 
-    async fn on_flush_one(&self, _update: &DC::CacheUpdate) -> Result<(), DC::Error> {
+    async fn on_flush_one(&self, _key: &DC::Key, _update: &DC::CacheUpdate) -> Result<(), Arc<DC::Error>> {
         Ok(())
     }
+
+    async fn on_monitor_error(&self, _error: &Arc<DC::Error>) {}
 }

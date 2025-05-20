@@ -72,7 +72,7 @@ pub struct RndPool {
     customers: SegQueue<Customer>,
 
     #[fieldx(lock, get(copy), get_mut, default(0))]
-    customer_id: u32,
+    customer_id: i32,
 
     // #[fieldx(lazy, builder(off))]
     // tx: Sender<bool>,

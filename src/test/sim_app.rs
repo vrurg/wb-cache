@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::io::BufWriter;
 use std::io::Read;
@@ -16,21 +17,29 @@ use fieldx_plus::fx_plus;
 use garde::Validate;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
+#[cfg(feature = "tracing")]
+use opentelemetry_sdk::metrics::SdkMeterProvider;
+#[cfg(feature = "tracing")]
+use opentelemetry_sdk::trace::SdkTracerProvider;
+#[cfg(feature = "tracing")]
+use opentelemetry_sdk::Resource;
 use postcard::to_io;
-use sea_orm::ConnectionTrait;
-use sea_orm::DatabaseConnection;
 use sea_orm_migration::MigratorTrait;
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
+use tracing::instrument;
 
 use super::actor::TestActor;
+use super::db::driver::pg::Pg;
+use super::db::driver::sqlite::Sqlite;
+use super::db::driver::DatabaseDriver;
 use super::db::migrations::Migrator;
+use super::progress::MaybeProgress;
 use super::progress::POrder;
 use super::progress::PStyle;
 use super::progress::ProgressUI;
 use super::scriptwriter::steps::Step;
 use super::scriptwriter::ScriptWriter;
-use super::types::simerr;
 use super::types::Result;
 use super::TestApp;
 
@@ -46,13 +55,6 @@ struct Cli {
     #[fieldx(get(clone))]
     #[garde(skip)]
     script: Option<PathBuf>,
-
-    /// Path to the directory where the database is stored.
-    /// If not provided, a temporary directory will be used.
-    #[clap(long)]
-    #[fieldx(get(copy(off)))]
-    #[garde(skip)]
-    db_path: Option<PathBuf>,
 
     /// Simulation period in "days".
     #[clap(long, default_value_t = 365)]
@@ -70,12 +72,12 @@ struct Cli {
     initial_customers: u32,
 
     /// The maximum number of customers the company can have.
-    #[clap(long, default_value_t = 10_000)]
+    #[clap(long, default_value_t = 1_000)]
     #[garde(range(min = 1))]
     market_capacity: u32,
 
     /// Where customer base growth reaches its peak.
-    #[clap(long, default_value_t = 3_000)]
+    #[clap(long, default_value_t = 400)]
     #[garde(range(min = 1), custom(Self::less_than("market-capacity", &self.market_capacity)))]
     inflection_point: u32,
 
@@ -110,6 +112,71 @@ struct Cli {
     #[clap(long, short)]
     #[garde(custom(Self::with_file(&self.script)))]
     load: bool,
+
+    #[cfg_attr(feature = "sqlite", clap(long))]
+    #[fieldx(get(copy, attributes_fn(cfg(feature = "sqlite"))))]
+    #[cfg(feature = "sqlite")]
+    #[garde(skip)]
+    /// Use SQLite as the database backend.
+    sqlite: bool,
+
+    /// Path to the directory where the SQLite database is stored.
+    /// If not provided, a temporary directory will be used.
+    #[cfg_attr(feature = "sqlite", clap(long, env = "WBCACHE_SQLITE_PATH"))]
+    #[fieldx(get(clone, attributes_fn(cfg(feature = "sqlite"))))]
+    #[cfg(feature = "sqlite")]
+    #[garde(skip)]
+    sqlite_path: Option<PathBuf>,
+
+    #[cfg_attr(feature = "pg", clap(long))]
+    #[fieldx(get(copy, attributes_fn(cfg(feature = "pg"))))]
+    #[garde(skip)]
+    #[cfg(feature = "pg")]
+    /// Use PostgreSQL as the database backend.
+    pg: bool,
+
+    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG_HOST", default_value = "localhost"))]
+    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[garde(skip)]
+    #[cfg(feature = "pg")]
+    pg_host: String,
+
+    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG_PORT", default_value_t = 5432))]
+    #[fieldx(get(copy, attributes_fn(cfg(feature = "pg"))))]
+    #[garde(skip)]
+    #[cfg(feature = "pg")]
+    pg_port: u16,
+
+    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG_USER", default_value = "wbcache"))]
+    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[garde(skip)]
+    #[cfg(feature = "pg")]
+    pg_user: String,
+
+    #[cfg_attr(
+        feature = "pg",
+        clap(long, env = "WBCACHE_PG_PASSWORD", hide_env_values = true, default_value = "wbcache")
+    )]
+    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[garde(skip)]
+    #[cfg(feature = "pg")]
+    pg_password: String,
+
+    #[cfg_attr(
+        feature = "pg",
+        clap(long, env = "WBCACHE_PG_DB_PREFIX", default_value = "wbcache_test")
+    )]
+    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[garde(skip)]
+    #[cfg(feature = "pg")]
+    pg_db_prefix: String,
+
+    /// File to send log into
+    #[cfg_attr(feature = "log", clap(long, env = "WBCACHE_LOG_FILE"))]
+    #[fieldx(get(clone, attributes_fn(cfg(feature = "log"), allow(unused))))]
+    #[garde(skip)]
+    #[cfg(feature = "log")]
+    log_file: Option<PathBuf>,
 }
 
 impl Cli {
@@ -123,8 +190,7 @@ impl Cli {
                     "{} is more than {max_name} ({})",
                     *value, *max
                 )))
-            }
-            else {
+            } else {
                 Ok(())
             }
         }
@@ -134,8 +200,7 @@ impl Cli {
         move |value, _| {
             if *value && file.is_none() {
                 Err(garde::Error::new("Script file name is required"))
-            }
-            else {
+            } else {
                 Ok(())
             }
         }
@@ -147,7 +212,7 @@ pub struct SimApp {
     #[fieldx(lazy, private, fallible, get(clone), default(Cli::parse()))]
     cli: Cli,
 
-    #[fieldx(lazy, get, fallible)]
+    #[fieldx(lazy, get, clearer, fallible)]
     script_writer: Arc<ScriptWriter>,
 
     #[fieldx(lazy, get, fallible)]
@@ -155,6 +220,12 @@ pub struct SimApp {
 
     #[fieldx(lazy, fallible, get)]
     progress_ui: ProgressUI,
+
+    #[fieldx(lock, get(copy), set("_set_plain_per_sec"), default(0.0))]
+    plain_per_sec: f64,
+
+    #[fieldx(lock, get(copy), set("_set_cached_per_sec"), default(0.0))]
+    cached_per_sec: f64,
 }
 
 impl SimApp {
@@ -165,15 +236,15 @@ impl SimApp {
     fn build_script_writer(&self) -> Result<Arc<ScriptWriter>, SimErrorAny> {
         let cli = self.cli()?;
         ScriptWriter::builder()
-            .period(cli.period())
-            .product_count(cli.products())
+            .period(cli.period() as i32)
+            .product_count(cli.products() as i32)
             .initial_customers(cli.initial_customers())
             .market_capacity(cli.market_capacity())
             .inflection_point(cli.inflection_point())
             .growth_rate(cli.growth_rate() as f64)
             .min_customer_orders(cli.min_customer_orders() as f64)
             .max_customer_orders(cli.max_customer_orders() as f64)
-            .return_window(cli.return_window())
+            .return_window(cli.return_window() as i32)
             .build()
     }
 
@@ -196,77 +267,105 @@ impl SimApp {
         Ok(())
     }
 
-    async fn new_sqlite_db(&self, db_file: &str) -> Result<Arc<DatabaseConnection>> {
-        let db_path = self.db_dir()?.join(db_file);
-
-        let schema = format!("sqlite://{}?mode=rwc", db_path.display());
-        let db = sea_orm::Database::connect(&schema)
-            .await
-            .inspect_err(|e| eprintln!("Error connecting to database {schema}: {e}"))?;
-
+    async fn db_prepare<D: DatabaseDriver>(&self, dbd: &D) -> Result<()> {
+        dbd.configure().await?;
+        let db = dbd.connection();
         Migrator::down(&db, None).await?;
         Migrator::up(&db, None).await?;
-
-        db.execute_unprepared("PRAGMA journal_mode=WAL;").await?;
-        db.execute_unprepared("PRAGMA cache=64000;").await?;
-        db.execute_unprepared("PRAGMA synchronous=NORMAL;").await?;
-
-        Ok(Arc::new(db))
+        Ok(())
     }
 
-    async fn execute_script(&self, screenplay: Vec<Step>) -> Result<(), SimErrorAny> {
+    #[instrument(level = "trace", skip(self, db_plain, db_cached, screenplay))]
+    async fn execute_script<D: DatabaseDriver>(
+        &self,
+        db_plain: D,
+        db_cached: D,
+        screenplay: Arc<Vec<Step>>,
+    ) -> Result<(), SimErrorAny> {
         let barrier = Arc::new(Barrier::new(2));
 
-        let mut actors = JoinSet::<Result<(&'static str, Duration), SimErrorAny>>::new();
-        let myself = self.myself().unwrap();
-        let screenplay = Arc::new(screenplay);
-        let s1 = screenplay.clone();
+        let message_progress = self.progress_ui()?.acquire_progress(PStyle::Message, None);
+        message_progress.maybe_set_prefix("Rate");
 
+        let mut tasks = JoinSet::<Result<(&'static str, Duration), SimErrorAny>>::new();
+
+        let myself = self.myself().unwrap();
+        tasks.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+
+                let rate = if myself.plain_per_sec() > 0.0 {
+                    myself.cached_per_sec() / myself.plain_per_sec()
+                } else {
+                    0.0
+                };
+
+                message_progress.maybe_set_message(format!("{rate:.2}x"));
+                message_progress.maybe_inc(1);
+            }
+        });
+
+        // Spawn the plain actor
+        let myself = self.myself().unwrap();
+        let s1 = screenplay.clone();
         let b1 = barrier.clone();
-        actors.spawn(async move {
+        tasks.spawn(async move {
+            myself.db_prepare(&db_plain).await?;
             b1.wait().await;
             let started = Instant::now();
             let plain_actor = agent_build!(
-                myself, crate::test::company_plain::TestCompany<Self> =>
-                    db: myself.new_sqlite_db("test_company_plain.db").await?;
+                myself, crate::test::company_plain::TestCompany<Self, D> {
+                    db: db_plain
+                }
             )?;
-            plain_actor.act(&s1).await.map_err(|err| {
-                let err = simerr!("{}", err);
-                err.context("plain");
-                err
+            plain_actor.act(&s1).await.inspect_err(|err| {
+                err.context("Plain actor");
             })?;
             Ok(("plain", Instant::now().duration_since(started)))
         });
 
+        // Spawn the cached actor
         let s2 = screenplay.clone();
         let b2 = barrier.clone();
         let myself = self.myself().unwrap();
-        actors.spawn(async move {
+        tasks.spawn(async move {
+            myself.db_prepare(&db_cached).await?;
             b2.wait().await;
             let started = Instant::now();
             let cached_actor = agent_build!(
-                myself, crate::test::company_cached::TestCompany<Self> =>
-                    db: myself.new_sqlite_db("test_company_cached.db").await?;
+                myself, crate::test::company_cached::TestCompany<Self, D> {
+                    db: db_cached
+                }
             )?;
-            cached_actor.act(&s2).await.map_err(|e| {
-                let err = simerr!("{}", e);
-                err.context("cached");
-                err
+            cached_actor.act(&s2).await.inspect_err(|err| {
+                myself
+                    .progress_ui()
+                    .unwrap()
+                    .report_error(format!("Error in cached actor: {err:#}"));
+                err.context("Cached actor");
             })?;
             Ok(("cached", Instant::now().duration_since(started)))
         });
 
-        let results = actors.join_all().await;
         let mut all_success = true;
         let mut outcomes = HashMap::new();
-        for result in results {
-            match result {
-                Ok((label, duration)) => {
+
+        while let Some(res) = tasks.join_next().await {
+            match res {
+                Ok(Ok((label, duration))) => {
                     outcomes.insert(label.to_string(), duration);
                 }
-                Err(err) => {
-                    eprintln!("Actor errored out: {err:#}");
+                Ok(Err(err)) => {
                     all_success = false;
+                    err.report_with_backtrace(format!("{err:#}"));
+                    tasks.abort_all();
+                }
+                Err(err) => {
+                    all_success = false;
+                    let err = SimErrorAny::from(err);
+                    err.report_with_backtrace(format!("{err:#}"));
+                    tasks.abort_all();
                 }
             }
         }
@@ -322,10 +421,185 @@ impl SimApp {
         Ok(script)
     }
 
+    fn db_dir(&self) -> Result<PathBuf, SimErrorAny> {
+        self.cli()?
+            .sqlite_path()
+            .as_ref()
+            .cloned()
+            .map_or_else(|| self.tempdir().map(|t| t.path().to_path_buf()), Ok)
+    }
+
+    #[instrument(level = "trace", skip(script, self))]
+    async fn execute_per_db(&self, script: Vec<Step>) -> Result<(), SimErrorAny> {
+        let cli = self.cli()?;
+        let script = Arc::new(script);
+
+        #[cfg(feature = "sqlite")]
+        if cli.sqlite() {
+            let db_plain = Sqlite::connect(&self.db_dir()?, "test_company_plan.db").await?;
+            let db_cached = Sqlite::connect(&self.db_dir()?, "test_company_cached.db").await?;
+            self.execute_script(db_plain, db_cached, script.clone()).await?;
+        }
+
+        #[cfg(feature = "pg")]
+        if cli.pg() {
+            let db_plain = Pg::builder()
+                .host(cli.pg_host())
+                .port(cli.pg_port())
+                .user(cli.pg_user())
+                .password(cli.pg_password())
+                .database(format!("{}_plain", cli.pg_db_prefix()))
+                .build()?
+                .connect()
+                .await?;
+            let db_cached = Pg::builder()
+                .host(cli.pg_host())
+                .port(cli.pg_port())
+                .user(cli.pg_user())
+                .password(cli.pg_password())
+                .database(format!("{}_cached", cli.pg_db_prefix()))
+                .build()?
+                .connect()
+                .await?;
+            self.execute_script(db_plain, db_cached, script.clone()).await?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "tracing")]
+    fn resource() -> Resource {
+        use opentelemetry::KeyValue;
+        use opentelemetry_semantic_conventions::attribute::DEPLOYMENT_ENVIRONMENT_NAME;
+        use opentelemetry_semantic_conventions::attribute::SERVICE_VERSION;
+        use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
+        use opentelemetry_semantic_conventions::SCHEMA_URL;
+
+        Resource::builder()
+            .with_service_name(env!("CARGO_PKG_NAME"))
+            .with_schema_url(
+                [
+                    KeyValue::new(SERVICE_NAME, "wb_cache::company"),
+                    KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+                    KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, "develop"),
+                ],
+                SCHEMA_URL,
+            )
+            .build()
+    }
+
+    #[cfg(feature = "tracing")]
+    fn init_meter_provider(&self) -> Result<SdkMeterProvider, SimErrorAny> {
+        use opentelemetry::global;
+        use opentelemetry_sdk::metrics::MeterProviderBuilder;
+        use opentelemetry_sdk::metrics::PeriodicReader;
+
+        let exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_temporality(opentelemetry_sdk::metrics::Temporality::default())
+            .build()
+            .unwrap();
+
+        let reader = PeriodicReader::builder(exporter)
+            .with_interval(std::time::Duration::from_secs(30))
+            .build();
+
+        // For debugging in development
+        // let stdout_reader = PeriodicReader::builder(opentelemetry_stdout::MetricExporter::default()).build();
+
+        let meter_provider = MeterProviderBuilder::default()
+            .with_resource(Self::resource())
+            .with_reader(reader)
+            // .with_reader(stdout_reader)
+            .build();
+
+        global::set_meter_provider(meter_provider.clone());
+
+        Ok(meter_provider)
+    }
+
+    #[cfg(feature = "tracing")]
+    fn init_tracer_provider(&self) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, SimErrorAny> {
+        use opentelemetry_sdk::trace::RandomIdGenerator;
+        use opentelemetry_sdk::trace::Sampler;
+
+        let exporter = opentelemetry_otlp::SpanExporter::builder().with_tonic().build()?;
+
+        Ok(SdkTracerProvider::builder()
+            // Customize sampling strategy
+            .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(1.0))))
+            // If export trace to AWS X-Ray, you can use XrayIdGenerator
+            .with_id_generator(RandomIdGenerator::default())
+            .with_resource(Self::resource())
+            .with_batch_exporter(exporter)
+            .build())
+    }
+
+    #[cfg(feature = "tracing")]
+    fn setup_tracing(&self, cli: &Cli) -> Result<(), SimErrorAny> {
+        use std::io;
+        use std::process;
+        use std::sync::Mutex;
+
+        use opentelemetry::trace::TracerProvider;
+        use tracing_loki::url::Url;
+        use tracing_opentelemetry::MetricsLayer;
+        use tracing_opentelemetry::OpenTelemetryLayer;
+        use tracing_subscriber::fmt::format::FmtSpan;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let dest_writer = Mutex::new(if let Some(log_file) = cli.log_file() {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(log_file)?;
+            Box::new(file) as Box<dyn io::Write + Send>
+        } else {
+            Box::new(io::stdout()) as Box<dyn io::Write + Send>
+        });
+
+        let (_loki, loki_task) = tracing_loki::builder()
+            .label("app", "wb_cache::company")?
+            .extra_field("pid", format!("{}", process::id()))?
+            .build_url(Url::parse("http://127.0.0.1:3100").unwrap())?;
+
+        let filter = tracing_subscriber::EnvFilter::from_default_env();
+        let tracer_provider = self.init_tracer_provider()?;
+        let meter_provider = self.init_meter_provider()?;
+        let tracer = tracer_provider.tracer("wb_cache::company");
+
+        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder().with_tonic().build()?;
+        let _ = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(otlp_exporter)
+            .build();
+
+        tracing_subscriber::registry()
+            .with(filter)
+            // .with(loki)
+            // .with(console_subscriber)
+            .with(OpenTelemetryLayer::new(tracer))
+            .with(MetricsLayer::new(meter_provider.clone()))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(dest_writer)
+                    .with_span_events(FmtSpan::FULL),
+            )
+            .try_init()?;
+
+        tokio::spawn(loki_task);
+
+        Ok(())
+    }
+
     pub async fn run() -> Result<(), SimErrorAny> {
         let app = SimApp::__fieldx_new();
         app.validate()?;
         let cli = app.cli()?;
+
+        #[cfg(feature = "tracing")]
+        app.setup_tracing(&cli)?;
 
         if cli.save() {
             return tokio::task::spawn_blocking(move || app.save_script()).await?;
@@ -333,29 +607,49 @@ impl SimApp {
 
         let script = if cli.load() {
             app.load_script()?
-        }
-        else {
-            app.script_writer()?.create()?
+        } else {
+            let s = app.script_writer()?.create()?;
+            app.clear_script_writer();
+            s
         };
 
-        app.execute_script(script).await
+        app.execute_per_db(script).await
+    }
+}
+
+impl Debug for SimApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SimApp {{ ... }}")
     }
 }
 
 impl TestApp for SimApp {
-    fn db_dir(&self) -> Result<PathBuf, SimErrorAny> {
-        self.cli()?
-            .db_path()
-            .as_ref()
-            .cloned()
-            .map_or_else(|| self.tempdir().map(|t| t.path().to_path_buf()), Ok)
-    }
-
     fn acquire_progress<'a>(
         &'a self,
         style: PStyle,
         order: Option<POrder<'a>>,
     ) -> Result<Option<ProgressBar>, SimErrorAny> {
         Ok(self.progress_ui()?.acquire_progress(style, order))
+    }
+
+    fn set_cached_per_sec(&self, step: f64) {
+        self._set_cached_per_sec(step);
+    }
+
+    fn set_plain_per_sec(&self, step: f64) {
+        self._set_plain_per_sec(step);
+    }
+
+    fn report_info<S: ToString>(&self, msg: S) {
+        self.progress_ui().unwrap().report_info(msg.to_string());
+    }
+    fn report_debug<S: ToString>(&self, msg: S) {
+        self.progress_ui().unwrap().report_debug(msg.to_string());
+    }
+    fn report_warn<S: ToString>(&self, msg: S) {
+        self.progress_ui().unwrap().report_warn(msg.to_string());
+    }
+    fn report_error<S: ToString>(&self, msg: S) {
+        self.progress_ui().unwrap().report_error(msg.to_string());
     }
 }

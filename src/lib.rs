@@ -67,6 +67,7 @@ pub mod entry_selector;
 pub mod test;
 pub mod traits;
 pub mod types;
+pub(crate) mod update_iterator;
 pub(crate) mod update_state;
 
 #[doc(inline)]
@@ -75,5 +76,8 @@ pub use cache::WBCache;
 pub use traits::WBDataController;
 
 pub mod prelude {
-    pub use crate::{cache::WBCache, entry::WBEntry, traits::WBDataController, types::*};
+    pub use crate::cache::WBCache;
+    pub use crate::entry::WBEntry;
+    pub use crate::traits::WBDataController;
+    pub use crate::types::*;
 }

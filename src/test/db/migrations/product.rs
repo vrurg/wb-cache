@@ -17,16 +17,10 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Products::Table)
                     .if_not_exists()
-                    .col(
-                        ColumnDef::new(Products::Id)
-                            .integer()
-                            .not_null()
-                            .auto_increment()
-                            .primary_key(),
-                    )
+                    .col(ColumnDef::new(Products::Id).integer().not_null().primary_key())
                     .col(ColumnDef::new(Products::Name).string().not_null())
                     .col(ColumnDef::new(Products::Price).double().not_null())
-                    .col(ColumnDef::new(Products::Views).big_unsigned().not_null())
+                    .col(ColumnDef::new(Products::Views).big_integer().not_null())
                     .to_owned(),
             )
             .await

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use sea_orm::ActiveValue;
 use sea_orm::DatabaseConnection;
 use sea_orm::EntityTrait;
 use sea_orm::QuerySelect;
+use tracing::instrument;
 
 use crate::cache;
 use crate::traits::WBObserver;
@@ -18,8 +20,8 @@ use crate::WBCache;
 
 use super::actor::TestActor;
 use super::db::cache::CacheUpdates;
-use super::db::cache::DBConnectionProvider;
-use super::db::entity::customer::CustomerBy;
+use super::db::cache::DBProvider;
+use super::db::driver::DatabaseDriver;
 use super::db::entity::session;
 use super::db::entity::*;
 use super::progress::MaybeProgress;
@@ -31,41 +33,51 @@ use super::types::SimError;
 use super::types::SimErrorAny;
 use super::TestApp;
 
-#[fx_plus(child(TestCompany<APP>, unwrap), sync)]
-struct OrderObserver<APP>
-where
-    APP: TestApp, {}
+type CustomerCache<APP, D> = Arc<WBCache<CustomerMgr<TestCompany<APP, D>>>>;
+type InvRecCache<APP, D> = Arc<WBCache<InventoryRecordMgr<TestCompany<APP, D>>>>;
+type OrderCache<APP, D> = Arc<WBCache<OrderMgr<TestCompany<APP, D>>>>;
+type ProductCache<APP, D> = Arc<WBCache<ProductMgr<TestCompany<APP, D>>>>;
+type SessionCache<APP, D> = Arc<WBCache<SessionMgr<TestCompany<APP, D>>>>;
 
-#[async_trait]
-impl<APP> WBObserver<OrderMgr<TestCompany<APP>>> for OrderObserver<APP>
+#[fx_plus(child(TestCompany<APP, D>, unwrap), sync)]
+struct OrderObserver<APP, D>
 where
     APP: TestApp,
+    D: DatabaseDriver, {}
+
+#[async_trait]
+impl<APP, D> WBObserver<OrderMgr<TestCompany<APP, D>>> for OrderObserver<APP, D>
+where
+    APP: TestApp,
+    D: DatabaseDriver,
 {
-    async fn on_flush(&self) -> Result<(), SimErrorAny> {
+    async fn on_flush(&self) -> Result<(), Arc<SimErrorAny>> {
         self.parent().customer_cache()?.flush().await?;
         Ok(())
     }
 
     async fn on_flush_one(
         &self,
+        _key: &Uuid,
         update: &CacheUpdates<super::db::entity::order::ActiveModel>,
-    ) -> Result<(), SimErrorAny> {
+    ) -> Result<(), Arc<SimErrorAny>> {
+        // self.parent()
+        //     .app()
+        //     .unwrap()
+        //     .report_debug(format!("OrderObserver::on_flush_one: {:?}", update));
         match update {
             CacheUpdates::Insert(am) | CacheUpdates::Update(am) => {
                 let company = self.parent();
 
                 match am.customer_id {
-                    ActiveValue::Set(customer_id) | ActiveValue::Unchanged(customer_id) => {
-                        company
-                            .customer_cache()?
-                            .flush_one(&CustomerBy::Id(customer_id))
-                            .await?;
+                    ActiveValue::Set(_customer_id) | ActiveValue::Unchanged(_customer_id) => {
+                        company.customer_cache()?.flush().await?;
                     }
                     _ => (),
                 }
                 match am.product_id {
-                    ActiveValue::Set(product_id) | ActiveValue::Unchanged(product_id) => {
-                        company.product_cache()?.flush_one(&product_id).await?;
+                    ActiveValue::Set(_product_id) | ActiveValue::Unchanged(_product_id) => {
+                        company.product_cache()?.flush().await?;
                     }
                     _ => (),
                 }
@@ -74,33 +86,45 @@ where
         }
         Ok(())
     }
+
+    async fn on_monitor_error(&self, error: &Arc<SimErrorAny>) {
+        self.parent()
+            .app()
+            .unwrap()
+            .report_debug(format!("OrderObserver::on_monitor_error: {:?}", error));
+    }
 }
 
-#[fx_plus(child(TestCompany<APP>, unwrap), sync)]
-struct SessionObserver<APP>
-where
-    APP: TestApp, {}
-
-#[async_trait]
-impl<APP> WBObserver<SessionMgr<TestCompany<APP>>> for SessionObserver<APP>
+#[derive(Debug)]
+#[fx_plus(child(TestCompany<APP,D>, unwrap), sync)]
+struct SessionObserver<APP, D>
 where
     APP: TestApp,
+    D: DatabaseDriver, {}
+
+#[async_trait]
+impl<APP, D> WBObserver<SessionMgr<TestCompany<APP, D>>> for SessionObserver<APP, D>
+where
+    APP: TestApp,
+    D: DatabaseDriver,
 {
-    async fn on_flush(&self) -> Result<(), SimErrorAny> {
+    async fn on_flush(&self) -> Result<(), Arc<SimErrorAny>> {
         self.parent().customer_cache()?.flush().await?;
         Ok(())
     }
 
     async fn on_flush_one(
         &self,
+        _key: &i64,
         update: &CacheUpdates<super::db::entity::session::ActiveModel>,
-    ) -> Result<(), SimErrorAny> {
+    ) -> Result<(), Arc<SimErrorAny>> {
         match update {
             CacheUpdates::Insert(am) | CacheUpdates::Update(am) => match am.customer_id {
-                ActiveValue::Set(Some(customer_id)) | ActiveValue::Unchanged(Some(customer_id)) => {
+                ActiveValue::Set(Some(_customer_id)) | ActiveValue::Unchanged(Some(_customer_id)) => {
                     self.parent()
                         .customer_cache()?
-                        .flush_one(&CustomerBy::Id(customer_id))
+                        // .flush_one(&CustomerBy::Id(customer_id))
+                        .flush()
                         .await?;
                 }
                 _ => (),
@@ -109,21 +133,29 @@ where
         }
         Ok(())
     }
+
+    async fn on_monitor_error(&self, error: &Arc<SimErrorAny>) {
+        self.parent()
+            .app()
+            .unwrap()
+            .report_debug(format!("SessionObserver::on_monitor_error: {:?}", error));
+    }
 }
 
 #[fx_plus(
     agent(APP, unwrap(or_else(SimErrorAny, <APP as TestApp>::app_is_gone()))),
     parent,
     fallible(off, error(SimErrorAny)),
-    sync
+    sync,
+    default(off)
 )]
 #[allow(clippy::type_complexity)]
-pub struct TestCompany<APP: TestApp> {
+pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
     #[fieldx(copy, get("_current_day"), inner_mut, set("_set_current_day", private), default(0))]
-    current_day: u32,
+    current_day: i32,
 
     #[fieldx(optional, private, inner_mut, get("_product_count", copy), set, builder(off))]
-    product_count: u32,
+    product_count: i32,
 
     #[fieldx(optional, private, inner_mut, get("_market_capacity", copy), set, builder(off))]
     market_capacity: u32,
@@ -131,8 +163,8 @@ pub struct TestCompany<APP: TestApp> {
     #[fieldx(lazy, get("_progress", private, clone), fallible)]
     progress: Arc<Option<ProgressBar>>,
 
-    #[fieldx(get(clone), builder(required))]
-    db: Arc<DatabaseConnection>,
+    #[fieldx(get, builder(required))]
+    db: D,
 
     #[fieldx(inner_mut, get(copy), set, default(0))]
     inv_check_no: u32,
@@ -141,22 +173,35 @@ pub struct TestCompany<APP: TestApp> {
     updated_from: HashMap<Uuid, Order>,
 
     #[fieldx(lazy, fallible, get(clone))]
-    customer_cache: Arc<WBCache<CustomerMgr<TestCompany<APP>>>>,
+    customer_cache: CustomerCache<APP, D>,
 
     #[fieldx(lazy, fallible, get(clone))]
-    inv_rec_cache: Arc<WBCache<InventoryRecordMgr<TestCompany<APP>>>>,
+    inv_rec_cache: InvRecCache<APP, D>,
 
     #[fieldx(lazy, fallible, get(clone))]
-    order_cache: Arc<WBCache<OrderMgr<TestCompany<APP>>>>,
+    order_cache: OrderCache<APP, D>,
 
     #[fieldx(lazy, fallible, get(clone))]
-    product_cache: Arc<WBCache<ProductMgr<TestCompany<APP>>>>,
+    product_cache: ProductCache<APP, D>,
 
     #[fieldx(lazy, fallible, get(clone))]
-    session_cache: Arc<WBCache<SessionMgr<TestCompany<APP>>>>,
+    session_cache: SessionCache<APP, D>,
 }
 
-impl<APP: TestApp> TestCompany<APP> {
+impl<APP, D> Debug for TestCompany<APP, D>
+where
+    APP: TestApp,
+    D: DatabaseDriver,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestCompany")
+            .field("current_day", &self.current_day())
+            .field("product_count", &self.product_count())
+            .finish()
+    }
+}
+
+impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
     fn build_progress(&self) -> Result<Arc<Option<ProgressBar>>, SimErrorAny> {
         let app = self.app()?;
         let progress = app.acquire_progress(PStyle::Main, None)?;
@@ -164,18 +209,18 @@ impl<APP: TestApp> TestCompany<APP> {
         Ok(Arc::new(progress))
     }
 
-    fn build_customer_cache(&self) -> Result<Arc<WBCache<CustomerMgr<TestCompany<APP>>>>, SimErrorAny> {
-        let customer_cache = child_build!(self, CustomerMgr<TestCompany<APP>>)?;
+    fn build_customer_cache(&self) -> Result<CustomerCache<APP, D>, SimErrorAny> {
+        let customer_cache = child_build!(self, CustomerMgr<TestCompany<APP, D>>)?;
         Ok(WBCache::builder()
             .name("customers")
             .data_controller(customer_cache)
-            .max_updates((self.market_capacity()? as u64 / 10).min(100))
+            .max_updates(self.market_capacity()? as u64)
             .max_capacity(self.market_capacity()? as u64)
             .build()?)
     }
 
-    fn build_inv_rec_cache(&self) -> Result<Arc<WBCache<InventoryRecordMgr<TestCompany<APP>>>>, SimErrorAny> {
-        let inv_rec_cache = child_build!(self, InventoryRecordMgr<TestCompany<APP>>)?;
+    fn build_inv_rec_cache(&self) -> Result<InvRecCache<APP, D>, SimErrorAny> {
+        let inv_rec_cache = child_build!(self, InventoryRecordMgr<TestCompany<APP, D>>)?;
         Ok(WBCache::builder()
             .name("inventory records")
             .data_controller(inv_rec_cache)
@@ -184,23 +229,23 @@ impl<APP: TestApp> TestCompany<APP> {
             .build()?)
     }
 
-    fn build_order_cache(&self) -> Result<Arc<WBCache<OrderMgr<TestCompany<APP>>>>, SimErrorAny> {
-        let order_cache = child_build!(self, OrderMgr<TestCompany<APP>>)?;
-        let order_observer = child_build!(self, OrderObserver<APP>)?;
+    fn build_order_cache(&self) -> Result<OrderCache<APP, D>, SimErrorAny> {
+        let order_cache = child_build!(self, OrderMgr<TestCompany<APP, D>>)?;
+        let order_observer = child_build!(self, OrderObserver<APP,D>)?;
         // Cache size is set based on the expectation that we may need to re-process one order per day per customer.
         // Re-process means handling a refund or shipping a backordered one.
         Ok(WBCache::builder()
             .name("orders")
             .data_controller(order_cache)
-            .max_updates(self.market_capacity()? as u64)
-            .max_capacity(self.market_capacity()? as u64 * 30)
+            .max_updates(self.market_capacity()? as u64 * 10)
+            .max_capacity(self.market_capacity()? as u64 * 100)
             .flush_interval(Duration::from_secs(60))
             .observer(order_observer)
             .build()?)
     }
 
-    fn build_product_cache(&self) -> Result<Arc<WBCache<ProductMgr<TestCompany<APP>>>>, SimErrorAny> {
-        let product_cache = child_build!(self, ProductMgr<TestCompany<APP>>)?;
+    fn build_product_cache(&self) -> Result<ProductCache<APP, D>, SimErrorAny> {
+        let product_cache = child_build!(self, ProductMgr<TestCompany<APP, D>>)?;
         Ok(WBCache::builder()
             .name("products")
             .data_controller(product_cache)
@@ -209,19 +254,19 @@ impl<APP: TestApp> TestCompany<APP> {
             .build()?)
     }
 
-    fn build_session_cache(&self) -> Result<Arc<WBCache<SessionMgr<TestCompany<APP>>>>, SimErrorAny> {
-        let session_cache = child_build!(self, SessionMgr<TestCompany<APP>>)?;
-        let session_observer = child_build!(self, SessionObserver<APP>)?;
+    fn build_session_cache(&self) -> Result<SessionCache<APP, D>, SimErrorAny> {
+        let session_cache = child_build!(self, SessionMgr<TestCompany<APP, D>>)?;
+        let session_observer = child_build!(self, SessionObserver<APP,D>)?;
         Ok(WBCache::builder()
             .name("sessions")
             .data_controller(session_cache)
-            .max_updates(self.market_capacity()? as u64 / 2)
-            .max_capacity(self.market_capacity()? as u64 * 10)
+            .max_updates(self.market_capacity()? as u64 * 10)
+            .max_capacity(self.market_capacity()? as u64 * 100)
             .observer(session_observer)
             .build()?)
     }
 
-    fn product_count(&self) -> Result<u32, SimErrorAny> {
+    fn product_count(&self) -> Result<i32, SimErrorAny> {
         self._product_count().ok_or_else(|| simerr!("Product count is not set"))
     }
 
@@ -230,6 +275,7 @@ impl<APP: TestApp> TestCompany<APP> {
             .ok_or_else(|| simerr!("Market capacity is not set"))
     }
 
+    #[instrument(level = "trace", skip(db))]
     async fn update_inventory(&self, db: &DatabaseConnection, order: &Order) -> Result<(), SimError> {
         match order.status {
             OrderStatus::Backordered | OrderStatus::Refunded | OrderStatus::Shipped | OrderStatus::Recheck => (),
@@ -251,16 +297,17 @@ impl<APP: TestApp> TestCompany<APP> {
 }
 
 #[async_trait]
-impl<APP> TestActor for TestCompany<APP>
+impl<APP, D> TestActor for TestCompany<APP, D>
 where
     APP: TestApp,
+    D: DatabaseDriver,
 {
     fn prelude(&self) -> Result<(), SimError> {
-        self.progress()?.maybe_set_prefix("cached");
+        self.progress()?.maybe_set_prefix("Cached");
         Ok(())
     }
 
-    async fn set_current_day(&self, day: u32) -> Result<(), SimError> {
+    async fn set_current_day(&self, day: i32) -> Result<(), SimError> {
         if day == 1 {
             self.customer_cache()?.flush().await?;
             self.product_cache()?.flush().await?;
@@ -270,7 +317,8 @@ where
         Ok(())
     }
 
-    fn current_day(&self) -> u32 {
+    #[inline(always)]
+    fn current_day(&self) -> i32 {
         self._current_day()
     }
 
@@ -284,16 +332,19 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn add_customer(&self, _db: &DatabaseConnection, customer: &Customer) -> Result<(), SimError> {
         self.customer_cache()?.insert(customer.clone()).await?;
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn add_product(&self, _db: &DatabaseConnection, product: &Product) -> Result<(), SimError> {
         self.product_cache()?.insert(product.clone()).await?;
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn add_inventory_record(
         &self,
         _db: &DatabaseConnection,
@@ -304,6 +355,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, db))]
     async fn add_order(&self, db: &DatabaseConnection, order: &Order) -> Result<(), SimError> {
         self.update_inventory(db, order).await?;
 
@@ -311,16 +363,18 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn add_session(&self, _db: &DatabaseConnection, session: &Session) -> Result<(), SimError> {
         self.session_cache()?.insert(session.clone()).await?;
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn check_inventory(
         &self,
         _db: &DatabaseConnection,
-        product_id: u32,
-        stock: u32,
+        product_id: i32,
+        stock: i64,
         comment: &str,
     ) -> Result<(), SimError> {
         let inventory_record = self.inv_rec_cache()?.get(&product_id).await?;
@@ -333,10 +387,11 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn update_inventory_record(
         &self,
         _db: &DatabaseConnection,
-        product_id: u32,
+        product_id: i32,
         quantity: i64,
     ) -> Result<(), SimError> {
         self.inv_rec_cache()?
@@ -345,7 +400,7 @@ where
             .and_try_compute_with(async |entry| {
                 if let Some(entry) = entry {
                     let mut inventory_record = entry.into_value();
-                    let new_stock = inventory_record.stock as i64 + quantity;
+                    let new_stock = inventory_record.stock + quantity;
                     if new_stock < 0 {
                         return Err(simerr!(
                             "Not enough stock for product ID {}: need {}, but only {} remaining",
@@ -354,10 +409,9 @@ where
                             inventory_record.stock
                         ));
                     }
-                    inventory_record.stock = new_stock as u32;
+                    inventory_record.stock = new_stock;
                     Ok(cache::Op::Put(inventory_record))
-                }
-                else {
+                } else {
                     Err(simerr!(
                         "Can't update non-existing inventory record for product ID: {}",
                         product_id
@@ -369,6 +423,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, db))]
     async fn update_order(&self, db: &DatabaseConnection, order_update: &Order) -> Result<(), SimError> {
         self.order_cache()?
             .entry(order_update.id)
@@ -379,8 +434,7 @@ where
                     let mut order: Order = entry.into_value();
                     order.status = order_update.status;
                     Ok(cache::Op::Put(order))
-                }
-                else {
+                } else {
                     Err(simerr!("Can't update non-existing order for ID: {}", order_update.id))
                 }
             })
@@ -389,7 +443,8 @@ where
         Ok(())
     }
 
-    async fn update_product_view_count(&self, _db: &DatabaseConnection, product_id: u32) -> Result<(), SimError> {
+    #[instrument(level = "trace", skip(self, _db))]
+    async fn update_product_view_count(&self, _db: &DatabaseConnection, product_id: i32) -> Result<(), SimError> {
         self.product_cache()?
             .entry(product_id)
             .await?
@@ -398,8 +453,7 @@ where
                     let mut product = entry.into_value();
                     product.views += 1;
                     Ok(cache::Op::Put(product))
-                }
-                else {
+                } else {
                     Err(simerr!("Can't update non-existing product for ID: {}", product_id))
                 }
             })
@@ -408,6 +462,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, _db))]
     async fn update_session(&self, _db: &DatabaseConnection, session_update: &Session) -> Result<(), SimError> {
         self.session_cache()?
             .entry(session_update.id)
@@ -418,8 +473,7 @@ where
                     session.customer_id = session_update.customer_id;
                     session.expires_on = session_update.expires_on;
                     Ok(cache::Op::Put(session))
-                }
-                else {
+                } else {
                     Err(simerr!(
                         "Can't update non-existing session for ID: {}",
                         session_update.id
@@ -431,6 +485,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self, db))]
     async fn collect_sessions(&self, db: &DatabaseConnection) -> Result<(), SimError> {
         // It is safe to drop expired sessions that have no user ID set because they cannot become valid.  For sessions
         // with a user ID, extra caution is required; do not directly delete those that are currently in the cache.
@@ -451,16 +506,14 @@ where
                 .and_try_compute_with(async |entry| {
                     if let Some(entry) = entry {
                         let session = entry.into_value();
-                        if (session.expires_on as u32) < self.current_day() {
+                        if session.expires_on < self.current_day() {
                             // Session expired
                             Ok(cache::Op::Remove)
-                        }
-                        else {
+                        } else {
                             // Session is still valid, do nothing
                             Ok(cache::Op::Nop)
                         }
-                    }
-                    else {
+                    } else {
                         // If the session ID was found in the database but not in the cache, it indicates that it was
                         // previously deleted but hadn't been flushed yet.
                         // The scenario of a bug in the WBCache implementation is not considered here.
@@ -473,22 +526,32 @@ where
         Ok(())
     }
 
-    async fn curtain_call(&self, _db: &DatabaseConnection) -> Result<(), SimError> {
-        self.customer_cache()?.close().await;
-        self.product_cache()?.close().await;
-        self.inv_rec_cache()?.close().await;
-        self.order_cache()?.close().await;
-        self.session_cache()?.close().await;
+    async fn step_complete(&self, _db: &DatabaseConnection, _step_num: usize) -> Result<(), SimError> {
+        self.app()?.set_cached_per_sec(self.progress()?.maybe_per_sec());
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn curtain_call(&self) -> Result<(), SimError> {
+        self.customer_cache()?.close().await?;
+        self.product_cache()?.close().await?;
+        self.inv_rec_cache()?.close().await?;
+        self.order_cache()?.close().await?;
+        self.session_cache()?.close().await?;
         Ok(())
     }
 }
 
-#[async_trait]
-impl<APP> DBConnectionProvider for TestCompany<APP>
+impl<APP, D> DBProvider for TestCompany<APP, D>
 where
     APP: TestApp,
+    D: DatabaseDriver,
 {
-    async fn db_connection(&self) -> Result<Arc<DatabaseConnection>, SimErrorAny> {
+    fn db_driver(&self) -> Result<&impl DatabaseDriver, SimErrorAny> {
         Ok(self.db())
+    }
+
+    fn db_connection(&self) -> Result<DatabaseConnection, SimErrorAny> {
+        Ok(self.db().connection())
     }
 }

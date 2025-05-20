@@ -13,8 +13,8 @@ use super::entity::inventory::InventoryCheck;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScriptTitle {
-    pub period:          u32,
-    pub products:        u32,
+    pub period:          i32,
+    pub products:        i32,
     pub market_capacity: u32,
 }
 
@@ -26,7 +26,7 @@ pub enum Step {
     Title(ScriptTitle),
     #[serde(rename = "d")]
     /// The simulation day number.
-    Day(u32),
+    Day(i32),
     /// Add a new product into the database.
     // #[serde(rename = "ap")]
     AddProduct(DbProduct),
@@ -53,7 +53,7 @@ pub enum Step {
     #[serde(rename = "is")]
     AddStock(IncomingShipment),
     /// Increase product views counter.
-    ViewProduct(u32),
+    ViewProduct(i32),
     /// Check the inventory stock and make sure it corresponds to the expected value.
     /// This is useful for testing purposes to ensure that scenario is in sync with the simulation.
     #[serde(rename = "ci")]

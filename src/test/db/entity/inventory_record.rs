@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,26 +7,26 @@ use sea_orm::entity::prelude::*;
 use sea_orm::IntoActiveModel;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio_stream::Stream;
 
 use crate::test::db::cache::CacheUpdates;
-use crate::test::db::cache::DBConnectionProvider;
+use crate::test::db::cache::DBProvider;
 use crate::test::db::cache::WBDCCommon;
 use crate::test::types::Result;
 use crate::test::types::SimErrorAny;
+use crate::update_iterator::WBUpdateIterator;
 use crate::WBDataController;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "inventory_records")]
 #[serde(deny_unknown_fields)]
 pub struct Model {
-    #[sea_orm(primary_key)]
+    #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "p")]
-    pub product_id:    u32,
+    pub product_id: i32,
     #[serde(rename = "s")]
-    pub stock:         u32,
+    pub stock: i64,
     #[serde(rename = "h")]
-    pub handling_days: u8,
+    pub handling_days: i16,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -43,29 +44,36 @@ impl ActiveModelBehavior for ActiveModel {}
 #[fx_plus(child(DBCP, rc_strong), sync, rc)]
 pub struct Manager<DBCP>
 where
-    DBCP: DBConnectionProvider, {}
+    DBCP: DBProvider, {}
 
 impl<DBCP> Manager<DBCP>
 where
-    DBCP: DBConnectionProvider,
+    DBCP: DBProvider,
 {
-    pub async fn get_by_product_id(&self, product_id: u32) -> Result<Option<Model>> {
-        let db = self.db_conn_provider().db_connection().await?;
-        Ok(Entity::find()
-            .filter(Column::ProductId.eq(product_id))
-            .one(db.as_ref())
+    pub async fn get_by_product_id(&self, product_id: i32) -> Result<Option<Model>> {
+        Ok(Entity::find_by_id(product_id)
+            .one(&self.db_provider().db_connection()?)
             .await?)
+    }
+}
+
+impl<DBCP> Debug for Manager<DBCP>
+where
+    DBCP: DBProvider,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InventoryRecordManager")
     }
 }
 
 #[async_trait]
 impl<DBCP> WBDataController for Manager<DBCP>
 where
-    DBCP: DBConnectionProvider,
+    DBCP: DBProvider,
 {
     type CacheUpdate = CacheUpdates<ActiveModel>;
     type Error = SimErrorAny;
-    type Key = u32;
+    type Key = i32;
     type Value = Model;
 
     async fn get_for_key(&self, key: &Self::Key) -> Result<Option<Self::Value>> {
@@ -76,10 +84,7 @@ where
         value.product_id
     }
 
-    async fn write_back(
-        &self,
-        update_records: impl Stream<Item = (Self::Key, Self::CacheUpdate)> + Send,
-    ) -> Result<(), Self::Error> {
+    async fn write_back(&self, update_records: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error> {
         self.wbdc_write_back(update_records).await
     }
 
@@ -113,13 +118,9 @@ where
 
 impl<DBCP> WBDCCommon<Entity, DBCP> for Manager<DBCP>
 where
-    DBCP: DBConnectionProvider,
+    DBCP: DBProvider,
 {
-    fn delete_many_condition(
-        &self,
-        dm: sea_orm::DeleteMany<Entity>,
-        keys: Vec<Self::Key>,
-    ) -> sea_orm::DeleteMany<Entity> {
+    fn delete_many_condition(dm: sea_orm::DeleteMany<Entity>, keys: Vec<Self::Key>) -> sea_orm::DeleteMany<Entity> {
         dm.filter(Column::ProductId.is_in(keys))
     }
 }

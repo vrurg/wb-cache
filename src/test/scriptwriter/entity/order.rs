@@ -9,11 +9,11 @@ pub struct Order {
     /// The order id.
     pub id:          Uuid,
     /// The customer id.
-    pub customer_id: u32,
+    pub customer_id: i32,
     /// The product id.
-    pub product_id:  u32,
+    pub product_id:  i32,
     /// The quantity of the product.
-    pub quantity:    u32,
+    pub quantity:    i32,
     /// The status of the order.
     pub status:      OrderStatus,
 }
