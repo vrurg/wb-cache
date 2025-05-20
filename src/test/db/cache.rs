@@ -94,10 +94,7 @@ where
         }
 
         if !inserts.is_empty() {
-            T::insert_many(inserts)
-                .exec_without_returning(&transaction)
-                .await
-                .inspect_err(|err| eprintln!("Error inserting records: {}", err))?;
+            T::insert_many(inserts).exec_without_returning(&transaction).await?;
         }
 
         if !deletes.is_empty() {

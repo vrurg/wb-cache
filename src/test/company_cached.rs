@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use fieldx_plus::child_build;
@@ -16,12 +18,14 @@ use tracing::instrument;
 
 use crate::cache;
 use crate::traits::WBObserver;
+use crate::update_iterator::WBUpdateIterator;
 use crate::WBCache;
 
 use super::actor::TestActor;
 use super::db::cache::CacheUpdates;
 use super::db::cache::DBProvider;
 use super::db::driver::DatabaseDriver;
+use super::db::entity::customer::CustomerBy;
 use super::db::entity::session;
 use super::db::entity::*;
 use super::progress::MaybeProgress;
@@ -51,20 +55,26 @@ where
     APP: TestApp,
     D: DatabaseDriver,
 {
-    async fn on_flush(&self) -> Result<(), Arc<SimErrorAny>> {
-        self.parent().customer_cache()?.flush().await?;
+    async fn on_flush(
+        &self,
+        _updates: Arc<WBUpdateIterator<OrderMgr<TestCompany<APP, D>>>>,
+    ) -> Result<(), SimErrorAny> {
+        let parent = self.parent();
+        parent
+            .app()?
+            .report_debug(format!("OrderObserver::on_flush: {}", _updates.len()));
+        parent.customer_cache()?.flush_raw().await?;
         Ok(())
     }
 
     async fn on_flush_one(
         &self,
-        _key: &Uuid,
+        key: &Uuid,
         update: &CacheUpdates<super::db::entity::order::ActiveModel>,
     ) -> Result<(), Arc<SimErrorAny>> {
         // self.parent()
-        //     .app()
-        //     .unwrap()
-        //     .report_debug(format!("OrderObserver::on_flush_one: {:?}", update));
+        //     .app()?
+        //     .report_debug(format!("OrderObserver::on_flush_one: {}", key));
         match update {
             CacheUpdates::Insert(am) | CacheUpdates::Update(am) => {
                 let company = self.parent();
@@ -91,7 +101,7 @@ where
         self.parent()
             .app()
             .unwrap()
-            .report_debug(format!("OrderObserver::on_monitor_error: {:?}", error));
+            .report_error(format!("OrderObserver::on_monitor_error: {:?}", error));
     }
 }
 
@@ -108,23 +118,47 @@ where
     APP: TestApp,
     D: DatabaseDriver,
 {
-    async fn on_flush(&self) -> Result<(), Arc<SimErrorAny>> {
-        self.parent().customer_cache()?.flush().await?;
+    async fn on_flush(
+        &self,
+        updates: Arc<WBUpdateIterator<SessionMgr<TestCompany<APP, D>>>>,
+    ) -> Result<(), SimErrorAny> {
+        self.parent()
+            .app()?
+            .report_debug(format!("SessionObserver::on_flush: {}", updates.len()));
+
+        let mut customer_ids: HashSet<CustomerBy> = HashSet::new();
+        while let Some(update) = updates.next() {
+            match update.update() {
+                CacheUpdates::Insert(am) | CacheUpdates::Update(am) => match am.customer_id {
+                    ActiveValue::Set(Some(customer_id)) | ActiveValue::Unchanged(Some(customer_id)) => {
+                        customer_ids.insert(CustomerBy::Id(customer_id));
+                    }
+                    _ => (),
+                },
+                CacheUpdates::Delete => (),
+            }
+        }
+        self.parent()
+            .customer_cache()?
+            .flush_many_raw(customer_ids.into_iter().collect::<Vec<_>>())
+            .await?;
         Ok(())
     }
 
     async fn on_flush_one(
         &self,
-        _key: &i64,
+        key: &i64,
         update: &CacheUpdates<super::db::entity::session::ActiveModel>,
     ) -> Result<(), Arc<SimErrorAny>> {
+        // self.parent()
+        //     .app()?
+        //     .report_debug(format!("SessionObserver::on_flush_one: {}", key));
         match update {
             CacheUpdates::Insert(am) | CacheUpdates::Update(am) => match am.customer_id {
-                ActiveValue::Set(Some(_customer_id)) | ActiveValue::Unchanged(Some(_customer_id)) => {
+                ActiveValue::Set(Some(customer_id)) | ActiveValue::Unchanged(Some(customer_id)) => {
                     self.parent()
                         .customer_cache()?
-                        // .flush_one(&CustomerBy::Id(customer_id))
-                        .flush()
+                        .flush_one(&CustomerBy::Id(customer_id))
                         .await?;
                 }
                 _ => (),
@@ -139,6 +173,13 @@ where
             .app()
             .unwrap()
             .report_debug(format!("SessionObserver::on_monitor_error: {:?}", error));
+    }
+
+    async fn on_debug(&self, message: &str) {
+        self.parent()
+            .app()
+            .unwrap()
+            .report_debug(format!("[sessions] {:?}", message));
     }
 }
 
@@ -186,6 +227,9 @@ pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
 
     #[fieldx(lazy, fallible, get(clone))]
     session_cache: SessionCache<APP, D>,
+
+    #[fieldx(inner_mut, set, get(copy), builder(off), default(Instant::now()))]
+    started: Instant,
 }
 
 impl<APP, D> Debug for TestCompany<APP, D>
@@ -216,6 +260,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
             .data_controller(customer_cache)
             .max_updates(self.market_capacity()? as u64)
             .max_capacity(self.market_capacity()? as u64)
+            .flush_interval(Duration::from_secs(600))
             .build()?)
     }
 
@@ -226,6 +271,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
             .data_controller(inv_rec_cache)
             .max_updates(self.product_count()? as u64)
             .max_capacity(self.product_count()? as u64)
+            .flush_interval(Duration::from_secs(600))
             .build()?)
     }
 
@@ -239,7 +285,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
             .data_controller(order_cache)
             .max_updates(self.market_capacity()? as u64 * 10)
             .max_capacity(self.market_capacity()? as u64 * 100)
-            .flush_interval(Duration::from_secs(60))
+            .flush_interval(Duration::from_secs(600))
             .observer(order_observer)
             .build()?)
     }
@@ -251,6 +297,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
             .data_controller(product_cache)
             .max_updates(self.product_count()? as u64)
             .max_capacity(self.product_count()? as u64)
+            .flush_interval(Duration::from_secs(60))
             .build()?)
     }
 
@@ -260,8 +307,9 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
         Ok(WBCache::builder()
             .name("sessions")
             .data_controller(session_cache)
-            .max_updates(self.market_capacity()? as u64 * 10)
-            .max_capacity(self.market_capacity()? as u64 * 100)
+            .max_updates((self.market_capacity()? as u64 * 100).max(100_000))
+            .max_capacity((self.market_capacity()? as u64 * 1000).max(1_000_000))
+            .flush_interval(Duration::from_secs(600))
             .observer(session_observer)
             .build()?)
     }
@@ -303,6 +351,7 @@ where
     D: DatabaseDriver,
 {
     fn prelude(&self) -> Result<(), SimError> {
+        self.set_started(Instant::now());
         self.progress()?.maybe_set_prefix("Cached");
         Ok(())
     }
@@ -526,8 +575,9 @@ where
         Ok(())
     }
 
-    async fn step_complete(&self, _db: &DatabaseConnection, _step_num: usize) -> Result<(), SimError> {
-        self.app()?.set_cached_per_sec(self.progress()?.maybe_per_sec());
+    async fn step_complete(&self, _db: &DatabaseConnection, step_num: usize) -> Result<(), SimError> {
+        let elapsed = self.started().elapsed().as_secs_f64();
+        self.app()?.set_cached_per_sec(step_num as f64 / elapsed);
         Ok(())
     }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use fieldx_plus::fx_plus;
@@ -44,6 +45,7 @@ pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
     current_day: i32,
 
     #[fieldx(lazy, get("_progress", private, clone), fallible)]
+    #[allow(clippy::type_complexity)]
     progress: Arc<Option<ProgressBar>>,
 
     #[fieldx(get, builder(required))]
@@ -54,6 +56,9 @@ pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
 
     #[fieldx(inner_mut, get, get_mut, default(HashMap::new()))]
     updated_from: HashMap<Uuid, Order>,
+
+    #[fieldx(inner_mut, set, get(copy), builder(off), default(Instant::now()))]
+    started: Instant,
 }
 
 impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
@@ -99,6 +104,7 @@ where
     D: DatabaseDriver,
 {
     fn prelude(&self) -> Result<(), SimError> {
+        self.set_started(Instant::now());
         self.progress()?.maybe_set_prefix("Plain ");
         Ok(())
     }
@@ -280,8 +286,9 @@ where
         Ok(())
     }
 
-    async fn step_complete(&self, _db: &DatabaseConnection, _step_num: usize) -> Result<(), SimError> {
-        self.app()?.set_plain_per_sec(self.progress()?.maybe_per_sec());
+    async fn step_complete(&self, _db: &DatabaseConnection, step_num: usize) -> Result<(), SimError> {
+        let elapsed = self.started().elapsed().as_secs_f64();
+        self.app()?.set_plain_per_sec(step_num as f64 / elapsed);
         Ok(())
     }
 }

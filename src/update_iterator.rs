@@ -3,10 +3,14 @@ use tokio::sync::OwnedRwLockWriteGuard;
 
 use crate::{WBCache, WBDataController};
 
-type WBKeyGuard<DC> = Option<(
+type WBKeyGuard<DC> = (
     <DC as WBDataController>::Key,
     OwnedRwLockWriteGuard<Option<<DC as WBDataController>::CacheUpdate>>,
-)>;
+);
+type WBKeyOptGuard<DC> = (
+    <DC as WBDataController>::Key,
+    Option<OwnedRwLockWriteGuard<Option<<DC as WBDataController>::CacheUpdate>>>,
+);
 
 #[fx_plus(
     child(WBCache<DC>, rc_strong),
@@ -20,15 +24,15 @@ pub struct WBUpdateIterator<DC>
 where
     DC: WBDataController + Send + Sync + 'static,
 {
-    #[fieldx(inner_mut, get_mut, builder(private))]
-    unprocessed: Vec<(DC::Key, Option<OwnedRwLockWriteGuard<Option<DC::CacheUpdate>>>)>,
+    #[fieldx(inner_mut, private, get, get_mut, builder(private))]
+    unprocessed: Vec<WBKeyOptGuard<DC>>,
 
-    #[fieldx(inner_mut, get(copy), set, builder(off))]
+    #[fieldx(inner_mut, private, get(copy), set, builder(off))]
     next_idx: usize,
 
     // Collect owned guards here. When the iterator is dropped the locks are released.
-    #[fieldx(inner_mut, get_mut, builder(off))]
-    worked: Vec<(DC::Key, OwnedRwLockWriteGuard<Option<DC::CacheUpdate>>)>,
+    #[fieldx(inner_mut, get_mut(vis(pub(crate))), builder(off))]
+    worked: Vec<WBKeyGuard<DC>>,
 }
 
 impl<DC> WBUpdateIterator<DC>
@@ -51,6 +55,10 @@ where
         for (_key, guard) in self.worked_mut().iter_mut() {
             guard.take();
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.unprocessed().len()
     }
 
     pub fn next(&self) -> Option<WBUpdateIteratorItem<DC>> {
@@ -100,6 +108,11 @@ where
             }
         }
     }
+
+    pub fn reset(&self) {
+        self.set_next_idx(0);
+        self.worked_mut().truncate(0);
+    }
 }
 
 impl<DC> WBUpdateIteratorBuilder<DC>
@@ -108,11 +121,8 @@ where
 {
     /// Setup the iterator from a list of keys. In this case it will attemp to collect the write locks from the update
     /// records.
-    pub fn keys<'a, I: Iterator<Item = &'a DC::Key>>(self, keys: I) -> Self {
-        let mut unprocessed = Vec::new();
-        for key in keys {
-            unprocessed.push((key.clone(), None));
-        }
+    pub fn keys(self, keys: Vec<DC::Key>) -> Self {
+        let unprocessed = keys.into_iter().map(|key| (key, None)).collect::<Vec<_>>();
         self.unprocessed(unprocessed)
     }
 
@@ -132,7 +142,7 @@ pub struct WBUpdateIteratorItem<DC>
 where
     DC: WBDataController + Send + Sync + 'static,
 {
-    key_guard: WBKeyGuard<DC>,
+    key_guard: Option<WBKeyGuard<DC>>,
 }
 
 impl<DC> WBUpdateIteratorItem<DC>

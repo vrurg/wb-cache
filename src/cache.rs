@@ -428,7 +428,7 @@ where
         value: Option<&DC::Value>,
     ) -> Result<Arc<WBUpdateState<DC>>, DC::Error> {
         if self.updates().len() as u64 >= self.max_updates() {
-            self._flush().await?;
+            self.flush_raw().await?;
         } else {
             self.check_updater_task().await;
         }
@@ -566,14 +566,19 @@ where
         count
     }
 
-    #[instrument(level = "trace")]
-    pub async fn _flush(&self) -> Result<usize, DC::Error> {
+    pub async fn flush_many_raw(&self, keys: Vec<DC::Key>) -> Result<usize, DC::Error> {
         let update_iter = child_build!(
             self, WBUpdateIterator<DC> {
-                keys: self.updates().keys(),
+                keys: keys
             }
         )
         .expect("Internal error: WBUpdateIterator builder failure");
+
+        on_event!(self, on_flush(update_iter.clone())?);
+
+        // Allow the update iterator to be re-iterated.  Since it's a non-deterministic iterator whose outcomes depend
+        // on the state of the cache update pool, its implementation supports such uncommon usage.
+        update_iter.reset();
 
         self.data_controller().write_back(update_iter.clone()).await?;
         let updates_count = self._clear_updates(update_iter);
@@ -583,16 +588,18 @@ where
     }
 
     #[instrument(level = "trace")]
+    pub async fn flush_raw(&self) -> Result<usize, DC::Error> {
+        let update_keys = {
+            let updates = self.updates();
+            updates.keys().cloned().collect::<Vec<_>>()
+        };
+        self.flush_many_raw(update_keys).await
+    }
+
+    #[instrument(level = "trace")]
     pub async fn flush(&self) -> Result<usize, Arc<DC::Error>> {
         check_error!(self);
-
-        if !self.has_updates() {
-            return Ok(0);
-        }
-
-        on_event!(self, on_flush()?);
-
-        self._flush().await.map_err(Arc::new)
+        self.flush_raw().await.map_err(Arc::new)
     }
 
     #[instrument(level = "trace")]
