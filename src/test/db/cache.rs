@@ -93,14 +93,25 @@ where
             };
         }
 
+        // It would be more efficient to do inserts/deletes as soon as we reach the limit. But for now accept this as
+        // a proof of concept.
+        // Also, the limit must be backend specific with possibly different values for SQLite, Postgres, and
+        // MySQL/MariaDB.
         if !inserts.is_empty() {
-            T::insert_many(inserts).exec_without_returning(&transaction).await?;
+            for insert_chunk in inserts.chunks(u16::MAX as usize) {
+                T::insert_many(insert_chunk.to_vec())
+                    .exec_without_returning(&transaction)
+                    .await?;
+            }
         }
 
         if !deletes.is_empty() {
-            Self::delete_many_condition(T::delete_many(), deletes)
-                .exec(&transaction)
-                .await?;
+            for delete_chunk in deletes.chunks(u16::MAX as usize) {
+                // We need to convert the keys to the type that the delete condition expects.
+                Self::delete_many_condition(T::delete_many(), delete_chunk.to_vec())
+                    .exec(&transaction)
+                    .await?;
+            }
         }
 
         transaction.commit().await?;
