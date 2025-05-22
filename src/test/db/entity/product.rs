@@ -38,7 +38,11 @@ pub enum Relation {}
 impl ActiveModelBehavior for ActiveModel {}
 
 // Manager for product entity
-#[fx_plus(child(DBCP, rc_strong), sync, rc)]
+#[fx_plus(
+    child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("product manager")))),
+    sync,
+    rc
+)]
 pub struct Manager<DBCP>
 where
     DBCP: DBProvider, {}
@@ -50,7 +54,7 @@ where
     pub async fn get_by_product_id(&self, product_id: i32) -> Result<Vec<Model>> {
         Ok(Entity::find()
             .filter(Column::Id.eq(product_id))
-            .all(&self.db_provider().db_connection()?)
+            .all(&self.db_provider()?.db_connection()?)
             .await?)
     }
 }
@@ -76,7 +80,7 @@ where
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>> {
         Ok(Entity::find_by_id(*id)
-            .one(&self.db_provider().db_connection()?)
+            .one(&self.db_provider()?.db_connection()?)
             .await?)
     }
 

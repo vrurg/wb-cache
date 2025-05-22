@@ -355,10 +355,6 @@ impl SimApp {
                 }
             )?;
             cached_actor.act(&s2).await.inspect_err(|err| {
-                myself
-                    .progress_ui()
-                    .unwrap()
-                    .report_error(format!("Error in cached actor: {err:#}"));
                 err.context("Cached actor");
             })?;
             myself.report_debug("Cached actor completed.");

@@ -617,6 +617,7 @@ where
         self.inv_rec_cache()?.close().await?;
         self.order_cache()?.close().await?;
         self.session_cache()?.close().await?;
+
         Ok(())
     }
 }

@@ -67,7 +67,11 @@ where
     PARENT: DBProvider,
     Self::Value: Send + Sync + 'static,
     Self::Key: ToString + Send + Sync + 'static,
-    Self: ::fieldx_plus::Child<WeakParent = Weak<PARENT>, RcParent = Arc<PARENT>, FXPParent = Arc<PARENT>>,
+    Self: ::fieldx_plus::Child<
+        WeakParent = Weak<PARENT>,
+        RcParent = Result<Arc<PARENT>, Self::Error>,
+        FXPParent = Weak<PARENT>,
+    >,
 {
     fn delete_many_condition(dm: DeleteMany<T>, keys: Vec<Self::Key>) -> DeleteMany<T>;
 
@@ -77,7 +81,7 @@ where
 
     #[instrument(level = "trace", skip(update_records))]
     async fn wbdc_write_back(&self, update_records: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error> {
-        let conn_provider = self.db_provider();
+        let conn_provider = self.db_provider()?;
         let db_conn = conn_provider.db_connection()?;
 
         let transaction = db_conn.begin().await?;

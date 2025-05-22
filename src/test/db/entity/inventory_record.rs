@@ -42,7 +42,11 @@ pub enum Relation {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-#[fx_plus(child(DBCP, rc_strong), sync, rc)]
+#[fx_plus(
+    child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("inventory record manager")))),
+    sync,
+    rc
+)]
 pub struct Manager<DBCP>
 where
     DBCP: DBProvider, {}
@@ -53,7 +57,7 @@ where
 {
     pub async fn get_by_product_id(&self, product_id: i32) -> Result<Option<Model>> {
         Ok(Entity::find_by_id(product_id)
-            .one(&self.db_provider().db_connection()?)
+            .one(&self.db_provider()?.db_connection()?)
             .await?)
     }
 }

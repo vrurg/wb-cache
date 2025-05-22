@@ -60,7 +60,11 @@ impl Display for CustomerBy {
     }
 }
 
-#[fx_plus(child(DBCP, rc_strong), sync, rc)]
+#[fx_plus(
+    child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("customer manager")))),
+    sync,
+    rc
+)]
 pub struct Manager<DBCP>
 where
     DBCP: DBProvider, {}
@@ -70,13 +74,13 @@ where
     DBCP: DBProvider,
 {
     pub async fn get_by_id(&self, id: i32) -> Result<Option<Model>> {
-        let parent = self.parent();
+        let parent = self.parent()?;
         let db = parent.db_connection()?;
         Ok(Entity::find_by_id(id).one(&db).await?)
     }
 
     pub async fn get_by_email(&self, email: &str) -> Result<Option<Model>> {
-        let parent = self.parent();
+        let parent = self.parent()?;
         let db = parent.db_connection()?;
         Ok(Entity::find().filter(Column::Email.eq(email)).one(&db).await?)
     }
@@ -117,7 +121,7 @@ where
                 .select_only()
                 .column(Column::Id)
                 .into_tuple::<i32>()
-                .one(&self.parent().db_connection()?)
+                .one(&self.parent()?.db_connection()?)
                 .await?
                 .map(CustomerBy::Id),
         })

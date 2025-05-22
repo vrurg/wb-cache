@@ -56,7 +56,11 @@ pub enum Relation {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-#[fx_plus(child(DBCP, rc_strong), sync, rc)]
+#[fx_plus(
+    child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("order manager")))),
+    sync,
+    rc
+)]
 pub struct Manager<DBCP>
 where
     DBCP: DBProvider, {}
@@ -68,7 +72,7 @@ where
     pub async fn get_by_order_id(&self, order_id: Uuid) -> Result<Vec<Model>, SimErrorAny> {
         Ok(Entity::find()
             .filter(Column::Id.eq(order_id))
-            .all(&self.db_provider().db_connection()?)
+            .all(&self.db_provider()?.db_connection()?)
             .await?)
     }
 }
@@ -94,7 +98,7 @@ where
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>> {
         Ok(Entity::find_by_id(*id)
-            .one(&self.db_provider().db_connection()?)
+            .one(&self.db_provider()?.db_connection()?)
             .await?)
     }
 

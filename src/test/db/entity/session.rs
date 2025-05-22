@@ -44,7 +44,11 @@ pub enum Relation {
 impl ActiveModelBehavior for ActiveModel {}
 
 // Manager for session entity
-#[fx_plus(child(DBCP, rc_strong), sync, rc)]
+#[fx_plus(
+    child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("session manager")))),
+    sync,
+    rc
+)]
 pub struct Manager<DBCP>
 where
     DBCP: DBProvider, {}
@@ -56,7 +60,7 @@ where
     pub async fn get_by_session_id(&self, session_id: i64) -> Result<Vec<Model>> {
         Ok(Entity::find()
             .filter(Column::Id.eq(session_id))
-            .all(&self.db_provider().db_driver()?.connection())
+            .all(&self.db_provider()?.db_driver()?.connection())
             .await?)
     }
 }
@@ -82,7 +86,7 @@ where
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>> {
         Ok(Entity::find_by_id(*id)
-            .one(&self.db_provider().db_connection()?)
+            .one(&self.db_provider()?.db_connection()?)
             .await?)
     }
 

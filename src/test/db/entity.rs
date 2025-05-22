@@ -20,3 +20,14 @@ pub use product::Model as Product;
 pub use session::Entity as Sessions;
 pub use session::Manager as SessionMgr;
 pub use session::Model as Session;
+
+use crate::test::types::simerr;
+use crate::test::types::SimErrorAny;
+
+// Generate an error when a manager object accidentally holds a weak reference to
+// a DB provider that has zero strong references. This scenario should not occur
+// under normal circumstances, except in the case of a severe internal error.
+#[inline(always)]
+pub(crate) fn dbcp_gone(who: &str) -> SimErrorAny {
+    simerr!("({who}) Database Provider object (parent) is gone")
+}
