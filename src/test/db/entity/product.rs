@@ -6,6 +6,7 @@ use crate::test::db::cache::DBProvider;
 use crate::test::db::cache::WBDCCommon;
 use crate::test::types::Result;
 use crate::test::types::SimErrorAny;
+use crate::types::WBDataControllerResponse;
 use crate::update_iterator::WBUpdateIterator;
 use crate::WBDataController;
 
@@ -87,21 +88,20 @@ where
         self.wbdc_write_back(update_records).await
     }
 
-    async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<Option<Self::CacheUpdate>, Self::Error> {
+    async fn on_new(
+        &self,
+        key: &Self::Key,
+        value: &Self::Value,
+    ) -> Result<WBDataControllerResponse<Self>, Self::Error> {
         self.wbdbc_on_new(key, &value.clone().into_active_model()).await
     }
 
-    async fn on_delete(&self, key: &Self::Key) -> Result<Option<Self::CacheUpdate>, Self::Error> {
-        self.wbdc_on_delete(key).await
-    }
-
-    async fn on_access(
+    async fn on_delete(
         &self,
-        _key: &Self::Key,
-        _value: &Self::Value,
-        prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<Option<Self::CacheUpdate>> {
-        Ok(prev_update)
+        key: &Self::Key,
+        update: Option<&CacheUpdates<ActiveModel>>,
+    ) -> Result<WBDataControllerResponse<Self>> {
+        self.wbdc_on_delete(key, update).await
     }
 
     async fn on_change(
@@ -110,7 +110,7 @@ where
         value: &Self::Value,
         old_value: Self::Value,
         prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<Option<Self::CacheUpdate>> {
+    ) -> Result<WBDataControllerResponse<Self>> {
         self.wbdc_on_change(key, value, old_value, prev_update).await
     }
 }

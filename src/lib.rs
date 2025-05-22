@@ -81,3 +81,13 @@ pub mod prelude {
     pub use crate::traits::WBDataController;
     pub use crate::types::*;
 }
+
+#[macro_export]
+macro_rules! wbdc_response {
+    ($op:expr, $update:expr) => {
+        $crate::types::WBDataControllerResponse {
+            op: $op,
+            update: $update,
+        }
+    };
+}

@@ -17,6 +17,7 @@ use crate::test::db::cache::DBProvider;
 use crate::test::db::cache::WBDCCommon;
 use crate::test::types::Result;
 use crate::test::types::SimErrorAny;
+use crate::types::WBDataControllerResponse;
 use crate::update_iterator::WBUpdateIterator;
 use crate::WBDataController;
 
@@ -100,14 +101,14 @@ where
     type Key = CustomerBy;
     type Value = Model;
 
-    async fn get_for_key(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+    async fn get_for_key(&self, key: &Self::Key) -> Result<Option<Self::Value>> {
         Ok(match key {
             CustomerBy::Id(id) => self.get_by_id(*id).await?,
             CustomerBy::Email(email) => self.get_by_email(email).await?,
         })
     }
 
-    async fn get_primary_key_for(&self, key: &Self::Key) -> Result<Option<Self::Key>, Self::Error> {
+    async fn get_primary_key_for(&self, key: &Self::Key) -> Result<Option<Self::Key>> {
         Ok(match key {
             CustomerBy::Id(_) => Some(key.clone()),
             // Select the ID alone. Or fail...
@@ -138,21 +139,20 @@ where
         self.wbdc_write_back(update_records).await
     }
 
-    async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<Option<Self::CacheUpdate>, Self::Error> {
+    async fn on_new(
+        &self,
+        key: &Self::Key,
+        value: &Self::Value,
+    ) -> Result<WBDataControllerResponse<Self>, Self::Error> {
         self.wbdbc_on_new(key, &value.clone().into_active_model()).await
     }
 
-    async fn on_delete(&self, key: &Self::Key) -> Result<Option<Self::CacheUpdate>, Self::Error> {
-        self.wbdc_on_delete(key).await
-    }
-
-    async fn on_access(
+    async fn on_delete(
         &self,
-        _key: &Self::Key,
-        _value: &Self::Value,
-        prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<Option<Self::CacheUpdate>, Self::Error> {
-        Ok(prev_update)
+        key: &Self::Key,
+        update: Option<&CacheUpdates<ActiveModel>>,
+    ) -> Result<WBDataControllerResponse<Self>> {
+        self.wbdc_on_delete(key, update).await
     }
 
     async fn on_change(
@@ -161,7 +161,7 @@ where
         value: &Self::Value,
         old_value: Self::Value,
         prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<Option<Self::CacheUpdate>, Self::Error> {
+    ) -> Result<WBDataControllerResponse<Self>> {
         self.wbdc_on_change(key, value, old_value, prev_update).await
     }
 }

@@ -61,7 +61,7 @@
 
 [features]
     default = ["sqlite"]
-    log = ["dep:log"]
+    log = ["log/max_level_trace"]
     mysql = ["sea-orm/sqlx-mysql"]
     pg = ["sea-orm/sqlx-postgres"]
     sqlite = ["sea-orm/sqlx-sqlite"]
@@ -76,6 +76,7 @@
         "dep:fake",
         "dep:indicatif",
         "dep:is-terminal",
+        "dep:log",
         "dep:num-format",
         "dep:num_cpus",
         "dep:parking_lot",
@@ -96,15 +97,19 @@
     ]
     tracing = [
         "log",
+        "dep:tracing-subscriber",
+        "tokio/tracing",
+        "tracing/max_level_trace",
+        "tracing/release_max_level_trace",
+    ]
+    tracing-file = []
+    tracing-loki = ["dep:tracing-loki"]
+    tracing-otlp = [
         "dep:opentelemetry",
         "dep:opentelemetry-otlp",
         "dep:opentelemetry-semantic-conventions",
         "dep:opentelemetry_sdk",
-        "dep:tracing-loki",
         "dep:tracing-opentelemetry",
-        "dep:tracing-subscriber",
-        "tokio/tracing",
-        "tracing/max_level_trace",
     ]
 
 [dev-dependencies]

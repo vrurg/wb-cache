@@ -18,11 +18,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::JoinHandle;
+use tokio::time::interval;
+use tracing::debug;
 use tracing::instrument;
 
 pub use moka::ops::compute::Op;
 
-macro_rules! on_event {
+macro_rules! wbc_event {
     ($self:ident, $method:ident($($args:tt)*) $( $post:tt )* ) => {
         {
         let observers = $self.observers().await;
@@ -135,9 +137,6 @@ where
     #[fieldx(get(copy), set, default(Duration::from_secs(10)))]
     flush_interval: Duration,
 
-    #[fieldx(get(copy), set, default(false))]
-    delete_immediately: bool,
-
     #[fieldx(vis(pub(crate)), lazy, clearer(private), get(clone), builder(off))]
     cache: WBArcCache<DC>,
 
@@ -145,14 +144,23 @@ where
     #[fieldx(vis(pub(crate)), lazy, predicate, clearer, get_mut, builder(off))]
     updates: WBUpdatesHash<DC>,
 
-    #[fieldx(private, clearer, lock, get, set, builder(off))]
-    updater_task: JoinHandle<()>,
+    #[fieldx(private, clearer, lock, writer, get, set, builder(off))]
+    monitor_task: JoinHandle<()>,
+
+    #[fieldx(get(copy), default(10))]
+    monitor_tick_duration: u64,
+
+    #[fieldx(private, lazy, get(clone))]
+    monitor_notifier: Arc<tokio::sync::Notify>,
 
     #[fieldx(lock, private, get(copy), set, builder(off), default(Instant::now()))]
     last_flush: Instant,
 
     #[fieldx(mode(async), private, lock, get, builder("_observers", private), default)]
     observers: Vec<Box<dyn WBObserver<DC>>>,
+
+    #[fieldx(private, lock, set, get(copy), builder(off), default)]
+    shutdown: bool,
 }
 
 impl<DC> WBCache<DC>
@@ -160,17 +168,25 @@ where
     DC: WBDataController,
 {
     fn build_cache(&self) -> WBArcCache<DC> {
+        let myself = self.myself().unwrap();
         Arc::new(
             Cache::builder()
                 .max_capacity(self.max_capacity())
                 .name(self.clear_name().unwrap_or_else(|| std::any::type_name::<DC::Value>()))
                 .eviction_policy(EvictionPolicy::tiny_lfu())
+                .eviction_listener(move |key, _value, removal_cause| {
+                    debug!("{} cache eviction: {key:?}, ({removal_cause:?})", myself.name());
+                })
                 .build(),
         )
     }
 
     fn build_updates(&self) -> HashMap<DC::Key, Arc<WBUpdateState<DC>>> {
-        HashMap::new()
+        HashMap::with_capacity(self.max_updates() as usize)
+    }
+
+    fn build_monitor_notifier(&self) -> Arc<tokio::sync::Notify> {
+        Arc::new(tokio::sync::Notify::new())
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -198,7 +214,9 @@ where
     {
         let myself = self.myself().unwrap();
 
-        self.maybe_flush_deleted(key).await?;
+        debug!("get_and_try_compute_with_primary(key: {key:?})");
+
+        self.maybe_flush_one(key).await?;
 
         let result = self
             .cache()
@@ -359,7 +377,9 @@ where
         key: &DC::Key,
         init: impl Future<Output = Result<DC::Value, DC::Error>>,
     ) -> Result<WBEntry<DC>, Arc<DC::Error>> {
-        self.maybe_flush_deleted(key).await?;
+        debug!("get_or_try_insert_with_primary(key: {key:?})");
+
+        self.maybe_flush_one(key).await?;
 
         let cache_entry = self
             .cache()
@@ -427,15 +447,16 @@ where
         key: &DC::Key,
         value: Option<&DC::Value>,
     ) -> Result<Arc<WBUpdateState<DC>>, DC::Error> {
-        if self.updates().len() as u64 >= self.max_updates() {
-            self.flush_raw().await?;
-        } else {
-            self.check_updater_task().await;
-        }
-
         let update_state;
+        self.check_monitor_task().await;
         {
             let mut updates = self.updates_mut();
+
+            let count = updates.len();
+            let current_capacity = updates.capacity();
+            if current_capacity <= (count - (count / 10)) {
+                updates.reserve(current_capacity.max(self.max_updates() as usize) / 2);
+            }
 
             let update_key = value
                 .map(|v| self.data_controller().primary_key_of(v))
@@ -574,7 +595,7 @@ where
         )
         .expect("Internal error: WBUpdateIterator builder failure");
 
-        on_event!(self, on_flush(update_iter.clone())?);
+        wbc_event!(self, on_flush(update_iter.clone())?);
 
         // Allow the update iterator to be re-iterated.  Since it's a non-deterministic iterator whose outcomes depend
         // on the state of the cache update pool, its implementation supports such uncommon usage.
@@ -603,6 +624,13 @@ where
     }
 
     #[instrument(level = "trace")]
+    pub async fn soft_flush(&self) -> Result<(), Arc<DC::Error>> {
+        check_error!(self);
+        self.monitor_notifier().notify_waiters();
+        Ok(())
+    }
+
+    #[instrument(level = "trace")]
     pub async fn flush_one(&self, key: &DC::Key) -> Result<usize, Arc<DC::Error>> {
         check_error!(self);
         let update = self.updates().get(key).cloned();
@@ -621,7 +649,9 @@ where
 
             // If the update is empty, we can safely skip it.
             if let Some(update_data) = guard.as_ref() {
-                on_event!(self, on_flush_one(key, update_data)?);
+                wbc_event!(self, on_flush_one(key, update_data)?);
+
+                debug!("flush single key: {key:?}");
 
                 let update_iter = child_build!(
                     self, WBUpdateIterator<DC> {
@@ -639,40 +669,88 @@ where
 
     #[instrument(level = "trace")]
     async fn monitor_updates(&self) {
+        let flush_interval = self.flush_interval();
+        let mut ticking_interval = interval(Duration::from_millis(self.monitor_tick_duration()));
+        let max_updates = self.max_updates() as usize;
+
         loop {
+            if self.shutdown() {
+                // The cache is shutting down. No need to flush anything.
+                return;
+            }
+
+            let mut forced = false;
+            let notifier = self.monitor_notifier();
+            tokio::select! {
+                _ = notifier.notified() => {
+                    // The flush was requested manually. Reset the timer.
+                    ticking_interval.reset();
+                    forced = true;
+                }
+                _ = ticking_interval.tick() => {
+                    // Do nothing, just wait for the next tick.
+                }
+            }
+
             if self.updates().is_empty() {
                 // Don't consume resources if no updates have been produced during the last flush interval.
                 break;
             }
 
-            let interval = self.flush_interval();
-            let remaining = interval.saturating_sub(self.last_flush().elapsed());
-            if remaining == Duration::ZERO {
+            if forced || self.updates().len() > max_updates || self.last_flush().elapsed() >= flush_interval {
                 // When last flush took place earlier than the flush interval ago...
                 if let Err(error) = self.flush().await {
                     self.set_error(error.clone());
-                    on_event!(self, on_monitor_error(&error));
+                    wbc_event!(self, on_monitor_error(&error));
                 }
             }
-
-            tokio::time::sleep(interval - remaining).await;
         }
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn check_updater_task(&self) {
-        if self.flush_interval() != Duration::ZERO && self.updater_task().as_ref().map_or(true, |t| t.is_finished()) {
-            let async_self = self.myself().unwrap();
-            self.set_updater_task(tokio::spawn(async move { async_self.monitor_updates().await }));
+    async fn check_monitor_task(&self) {
+        if self.shutdown() {
+            return;
         }
+
+        let mut task_guard = self.write_monitor_task();
+        if self.flush_interval() != Duration::ZERO && task_guard.as_ref().map_or(true, |t| t.is_finished()) {
+            let async_self = self.myself().unwrap();
+            *task_guard = Some(tokio::spawn(async move { async_self.monitor_updates().await }));
+        }
+    }
+
+    async fn _on_op(&self, op: WBDataControllerOp, key: &DC::Key, value: Option<DC::Value>) -> Result<(), DC::Error> {
+        match op {
+            WBDataControllerOp::Nop => (),
+            WBDataControllerOp::Insert => {
+                if let Some(value) = value {
+                    self.cache().insert(key.clone(), ValueState::Primary(value)).await;
+                }
+            }
+            WBDataControllerOp::Revoke => {
+                self.cache().invalidate(key).await;
+            }
+            WBDataControllerOp::Drop => {
+                self.cache().invalidate(key).await;
+                self.updates_mut().remove(key);
+            }
+        }
+
+        Ok(())
     }
 
     #[instrument(level = "trace")]
     pub(crate) async fn on_new(&self, key: &DC::Key, value: DC::Value) -> Result<(), DC::Error> {
-        self.get_update_state(key, Some(&value))
+        let op = self
+            .get_update_state(key, Some(&value))
             .await?
-            .on_new(key, value)
+            .on_new(key, &value)
             .await?;
+
+        debug!("on_new(key: {key:?}, value: {value:?}) -> {op:?}");
+        self._on_op(op, key, Some(value)).await?;
+
         Ok(())
     }
 
@@ -683,10 +761,14 @@ where
         value: &DC::Value,
         old_val: DC::Value,
     ) -> Result<(), Arc<DC::Error>> {
-        self.get_update_state(key, Some(value))
+        let op = self
+            .get_update_state(key, Some(value))
             .await?
             .on_change(key, value, old_val)
             .await?;
+
+        self._on_op(op, key, Some(value.clone())).await?;
+
         Ok(())
     }
 
@@ -696,44 +778,51 @@ where
         key: &DC::Key,
         value: &'a DC::Value,
     ) -> Result<&'a DC::Value, Arc<DC::Error>> {
-        self.get_update_state(key, Some(value))
+        let op = self
+            .get_update_state(key, Some(value))
             .await?
             .on_access(key, value)
             .await?;
+
+        self._on_op(op, key, Some(value.clone())).await?;
+
         Ok(value)
     }
 
     #[instrument(level = "trace")]
     pub(crate) async fn on_delete(&self, key: &DC::Key, value: Option<DC::Value>) -> Result<(), Arc<DC::Error>> {
-        self.get_update_state(key, value.as_ref()).await?.on_delete(key).await?;
-        if self.delete_immediately() {
-            self.maybe_flush_deleted(key).await?;
-        }
+        let op = self.get_update_state(key, value.as_ref()).await?.on_delete(key).await?;
+        self._on_op(op, key, value).await?;
         Ok(())
     }
 
-    // If a key has been deleted but not flushed yet do it now to prevent re-reading from the backend.
+    // If a key is in the updates but not in the cache, it means that to obtain its valid value, we need to flush it
+    // first.
     #[instrument(level = "trace")]
-    pub(crate) async fn maybe_flush_deleted(&self, key: &DC::Key) -> Result<usize, Arc<DC::Error>> {
+    pub(crate) async fn maybe_flush_one(&self, key: &DC::Key) -> Result<usize, Arc<DC::Error>> {
         if self.cache().contains_key(key) {
             return Ok(0);
         }
-        // if let Some(update) = self.updates().get(key) {
-        //     if !update.is_delete() {
-        //         return Ok(0);
-        //     }
-        // }
+        debug!("DO flush_one(key: {key:?})");
         return self.flush_one(key).await;
     }
 
     #[instrument(level = "trace")]
     pub async fn close(&self) -> Result<(), Arc<DC::Error>> {
         check_error!(self);
-        let _ = self.flush().await;
-        if let Some(updater) = self.clear_updater_task() {
-            updater.abort();
-            let _ = updater.await;
+        self.set_shutdown(true);
+        if let Some(monitor) = self.clear_monitor_task() {
+            self.monitor_notifier().notify_waiters();
+            tokio::pin!(monitor);
+            tokio::select! {
+                _ = &mut monitor => (),
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                    wbc_event!(self, on_debug(&format!("[{}] Monitor task didn't finish in time.", self.name())));
+                    let _ = &mut monitor.abort();
+                }
+            }
         }
+        let _ = self.flush().await;
         self.clear_cache();
         Ok(())
     }
@@ -746,8 +835,6 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WBCache")
             .field("name", &self.name())
-            .field("max_capacity", &self.max_capacity())
-            .field("max_updates", &self.max_updates())
             .field("updates_count", &self.updates().len())
             .field("cache_entries", &self.cache().entry_count())
             .finish()

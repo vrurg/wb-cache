@@ -142,6 +142,7 @@ pub struct WBUpdateIteratorItem<DC>
 where
     DC: WBDataController + Send + Sync + 'static,
 {
+    // Option here is to allow the Drop trait to take the guard back to the iterator.
     key_guard: Option<WBKeyGuard<DC>>,
 }
 
@@ -167,7 +168,11 @@ where
     }
 
     pub fn confirm(mut self) {
-        self.key_guard.take();
+        if let Some(mut guard) = self.key_guard.take() {
+            guard.1.take();
+        } else {
+            unreachable!("Internal error: guard is None");
+        }
     }
 }
 

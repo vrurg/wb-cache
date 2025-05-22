@@ -4,7 +4,10 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::types::WBDataControllerOp;
+use crate::types::WBDataControllerResponse;
 use crate::update_iterator::WBUpdateIterator;
+use crate::wbdc_response;
 
 // For types that are in charge of reading/writing records.
 #[async_trait]
@@ -21,15 +24,20 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
     async fn get_for_key(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error>;
     // In the future the method might return a list of instructions for the cache on how to act upon modified keys.
     async fn write_back(&self, updates: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error>;
-    async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<Option<Self::CacheUpdate>, Self::Error>;
-    async fn on_delete(&self, key: &Self::Key) -> Result<Option<Self::CacheUpdate>, Self::Error>;
+    async fn on_new(&self, key: &Self::Key, value: &Self::Value)
+        -> Result<WBDataControllerResponse<Self>, Self::Error>;
+    async fn on_delete(
+        &self,
+        key: &Self::Key,
+        update: Option<&Self::CacheUpdate>,
+    ) -> Result<WBDataControllerResponse<Self>, Self::Error>;
     async fn on_change(
         &self,
         key: &Self::Key,
         value: &Self::Value,
         old_value: Self::Value,
         prev_handler: Option<Self::CacheUpdate>,
-    ) -> Result<Option<Self::CacheUpdate>, Self::Error>;
+    ) -> Result<WBDataControllerResponse<Self>, Self::Error>;
     fn primary_key_of(&self, value: &Self::Value) -> Self::Key;
 
     /// Returns a list of secondary keys for the given value.
@@ -55,9 +63,9 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
         _key: &Self::Key,
         _value: &Self::Value,
         prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<Option<Self::CacheUpdate>, Self::Error> {
+    ) -> Result<WBDataControllerResponse<Self>, Self::Error> {
         // log::debug!("default DC on_access for '{_key}'");
-        Ok(prev_update)
+        Ok(wbdc_response!(WBDataControllerOp::Nop, prev_update))
     }
 }
 

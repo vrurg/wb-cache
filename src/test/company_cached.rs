@@ -14,6 +14,7 @@ use sea_orm::ActiveValue;
 use sea_orm::DatabaseConnection;
 use sea_orm::EntityTrait;
 use sea_orm::QuerySelect;
+use tracing::debug;
 use tracing::instrument;
 
 use crate::cache;
@@ -72,9 +73,11 @@ where
         key: &Uuid,
         update: &CacheUpdates<super::db::entity::order::ActiveModel>,
     ) -> Result<(), Arc<SimErrorAny>> {
-        // self.parent()
-        //     .app()?
-        //     .report_debug(format!("OrderObserver::on_flush_one: {}", key));
+        self.parent()
+            .app()?
+            .report_debug(format!("OrderObserver::on_flush_one: {}", key));
+        debug!("OrderObserver::on_flush_one: {}", key);
+
         match update {
             CacheUpdates::Insert(am) | CacheUpdates::Update(am) => {
                 let company = self.parent();
@@ -102,6 +105,14 @@ where
             .app()
             .unwrap()
             .report_error(format!("OrderObserver::on_monitor_error: {:?}", error));
+    }
+
+    async fn on_debug(&self, message: &str) {
+        debug!("[orders] {}", message);
+        self.parent()
+            .app()
+            .unwrap()
+            .report_debug(format!("[orders] {}", message));
     }
 }
 
@@ -150,9 +161,11 @@ where
         key: &i64,
         update: &CacheUpdates<super::db::entity::session::ActiveModel>,
     ) -> Result<(), Arc<SimErrorAny>> {
-        // self.parent()
-        //     .app()?
-        //     .report_debug(format!("SessionObserver::on_flush_one: {}", key));
+        self.parent()
+            .app()?
+            .report_debug(format!("SessionObserver::on_flush_one: {}", key));
+        debug!("SessionObserver::on_flush_one: {}", key);
+
         match update {
             CacheUpdates::Insert(am) | CacheUpdates::Update(am) => match am.customer_id {
                 ActiveValue::Set(Some(customer_id)) | ActiveValue::Unchanged(Some(customer_id)) => {
@@ -172,14 +185,15 @@ where
         self.parent()
             .app()
             .unwrap()
-            .report_debug(format!("SessionObserver::on_monitor_error: {:?}", error));
+            .report_error(format!("SessionObserver::on_monitor_error: {:?}", error));
     }
 
     async fn on_debug(&self, message: &str) {
+        debug!("[sessions] {}", message);
         self.parent()
             .app()
             .unwrap()
-            .report_debug(format!("[sessions] {:?}", message));
+            .report_debug(format!("[sessions] {}", message));
     }
 }
 
@@ -283,8 +297,8 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
         Ok(WBCache::builder()
             .name("orders")
             .data_controller(order_cache)
-            .max_updates(self.market_capacity()? as u64 * 10)
-            .max_capacity(self.market_capacity()? as u64 * 100)
+            .max_updates(self.market_capacity()? as u64 * 100)
+            .max_capacity((self.market_capacity()? as u64 * 1000).max(1_000_000))
             .flush_interval(Duration::from_secs(600))
             .observer(order_observer)
             .build()?)
@@ -363,6 +377,8 @@ where
             self.inv_rec_cache()?.flush().await?;
         }
         self._set_current_day(day);
+        self.session_cache()?.soft_flush().await?;
+        self.order_cache()?.soft_flush().await?;
         Ok(())
     }
 
@@ -406,14 +422,18 @@ where
 
     #[instrument(level = "trace", skip(self, db))]
     async fn add_order(&self, db: &DatabaseConnection, order: &Order) -> Result<(), SimError> {
+        debug!(
+            "Adding order {} on product {}: {}, {:?}",
+            order.id, order.product_id, order.quantity, order.status
+        );
         self.update_inventory(db, order).await?;
-
         self.order_cache()?.insert(order.clone()).await?;
         Ok(())
     }
 
     #[instrument(level = "trace", skip(self, _db))]
     async fn add_session(&self, _db: &DatabaseConnection, session: &Session) -> Result<(), SimError> {
+        debug!("Adding session {} for customer {:?}", session.id, session.customer_id);
         self.session_cache()?.insert(session.clone()).await?;
         Ok(())
     }
@@ -474,6 +494,10 @@ where
 
     #[instrument(level = "trace", skip(self, db))]
     async fn update_order(&self, db: &DatabaseConnection, order_update: &Order) -> Result<(), SimError> {
+        debug!(
+            "Updating order {} on product {}: {}, {:?}",
+            order_update.id, order_update.product_id, order_update.quantity, order_update.status
+        );
         self.order_cache()?
             .entry(order_update.id)
             .await?
@@ -513,6 +537,10 @@ where
 
     #[instrument(level = "trace", skip(self, _db))]
     async fn update_session(&self, _db: &DatabaseConnection, session_update: &Session) -> Result<(), SimError> {
+        debug!(
+            "Updating session {} for customer {:?}",
+            session_update.id, session_update.customer_id
+        );
         self.session_cache()?
             .entry(session_update.id)
             .await?
@@ -540,6 +568,7 @@ where
         // with a user ID, extra caution is required; do not directly delete those that are currently in the cache.
         self.collect_session_stubs(db).await?;
 
+        let session_cache = self.session_cache()?;
         let user_sessions = Sessions::find()
             .select_only()
             .column(session::Column::Id)
@@ -549,7 +578,7 @@ where
             .await?;
 
         for session_id in user_sessions {
-            self.session_cache()?
+            session_cache
                 .entry(session_id)
                 .await?
                 .and_try_compute_with(async |entry| {

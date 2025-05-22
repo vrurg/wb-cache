@@ -1,3 +1,8 @@
+// - PostgreSQL
+// [INFO]       plain |      cached
+// [INFO]   25941.91s |     294.50s
+// [INFO]      88.09x |       1.00x
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -17,12 +22,6 @@ use fieldx_plus::fx_plus;
 use garde::Validate;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
-#[cfg(feature = "tracing")]
-use opentelemetry_sdk::metrics::SdkMeterProvider;
-#[cfg(feature = "tracing")]
-use opentelemetry_sdk::trace::SdkTracerProvider;
-#[cfg(feature = "tracing")]
-use opentelemetry_sdk::Resource;
 use postcard::to_io;
 use sea_orm_migration::MigratorTrait;
 use tokio::sync::Barrier;
@@ -177,6 +176,19 @@ struct Cli {
     #[garde(skip)]
     #[cfg(feature = "log")]
     log_file: Option<PathBuf>,
+
+    /// URL of the Loki server for tracing.
+    #[cfg_attr(
+        all(feature = "tracing", feature = "tracing-loki"),
+        clap(long, env = "WBCACHE_LOKI_URL", default_value = "https://127.0.0.1:3100")
+    )]
+    #[fieldx(get(
+        clone,
+        attributes_fn(cfg(all(feature = "tracing", feature = "tracing-loki")), allow(unused))
+    ))]
+    #[garde(skip)]
+    #[cfg(all(feature = "tracing", feature = "tracing-loki"))]
+    loki_url: tracing_loki::url::Url,
 }
 
 impl Cli {
@@ -218,7 +230,7 @@ pub struct SimApp {
     #[fieldx(lazy, get, fallible)]
     tempdir: tempfile::TempDir,
 
-    #[fieldx(lazy, fallible, get)]
+    #[fieldx(lazy, fallible, get, clearer)]
     progress_ui: ProgressUI,
 
     #[fieldx(lock, get(copy), set("_set_plain_per_sec"), default(0.0))]
@@ -290,7 +302,7 @@ impl SimApp {
         let mut tasks = JoinSet::<Result<(&'static str, Duration), SimErrorAny>>::new();
 
         let myself = self.myself().unwrap();
-        tasks.spawn(async move {
+        tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(100));
             loop {
                 interval.tick().await;
@@ -301,7 +313,11 @@ impl SimApp {
                     0.0
                 };
 
-                message_progress.maybe_set_message(format!("{rate:.2}x"));
+                message_progress.maybe_set_message(format!(
+                    "{rate:.2}x | Average: cached {:.2}/s, plain {:.2}/s",
+                    myself.cached_per_sec(),
+                    myself.plain_per_sec()
+                ));
                 message_progress.maybe_inc(1);
             }
         });
@@ -345,6 +361,7 @@ impl SimApp {
                     .report_error(format!("Error in cached actor: {err:#}"));
                 err.context("Cached actor");
             })?;
+            myself.report_debug("Cached actor completed.");
             Ok(("cached", Instant::now().duration_since(started)))
         });
 
@@ -354,6 +371,7 @@ impl SimApp {
         while let Some(res) = tasks.join_next().await {
             match res {
                 Ok(Ok((label, duration))) => {
+                    self.report_info(format!("{} actor completed in {:.2}s", label, duration.as_secs_f64()));
                     outcomes.insert(label.to_string(), duration);
                 }
                 Ok(Err(err)) => {
@@ -368,14 +386,23 @@ impl SimApp {
                     tasks.abort_all();
                 }
             }
+            self.report_info(format!("Tasks left: {}", tasks.len()));
         }
 
         if all_success {
             let plain = outcomes.get("plain").unwrap();
             let cached = outcomes.get("cached").unwrap();
-            println!("\n{:>11} | {:>11}", "plain", "cached");
-            println!("{:>10.2}s | {:>10.2}s", plain.as_secs_f64(), cached.as_secs_f64());
-            println!("{:>10.2}x | {:>10.2}x", plain.as_secs_f64() / cached.as_secs_f64(), 1.0);
+            self.report_info(format!("{:>11} | {:>11}", "plain", "cached"));
+            self.report_info(format!(
+                "{:>10.2}s | {:>10.2}s",
+                plain.as_secs_f64(),
+                cached.as_secs_f64()
+            ));
+            self.report_info(format!(
+                "{:>10.2}x | {:>10.2}x",
+                plain.as_secs_f64() / cached.as_secs_f64(),
+                1.0
+            ));
         }
 
         Ok(())
@@ -467,15 +494,15 @@ impl SimApp {
         Ok(())
     }
 
-    #[cfg(feature = "tracing")]
-    fn resource() -> Resource {
+    #[cfg(all(feature = "tracing", feature = "tracing-otlp"))]
+    fn resource() -> opentelemetry_sdk::Resource {
         use opentelemetry::KeyValue;
         use opentelemetry_semantic_conventions::attribute::DEPLOYMENT_ENVIRONMENT_NAME;
         use opentelemetry_semantic_conventions::attribute::SERVICE_VERSION;
         use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
         use opentelemetry_semantic_conventions::SCHEMA_URL;
 
-        Resource::builder()
+        opentelemetry_sdk::Resource::builder()
             .with_service_name(env!("CARGO_PKG_NAME"))
             .with_schema_url(
                 [
@@ -488,8 +515,8 @@ impl SimApp {
             .build()
     }
 
-    #[cfg(feature = "tracing")]
-    fn init_meter_provider(&self) -> Result<SdkMeterProvider, SimErrorAny> {
+    #[cfg(all(feature = "tracing", feature = "tracing-otlp"))]
+    fn init_meter_provider(&self) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, SimErrorAny> {
         use opentelemetry::global;
         use opentelemetry_sdk::metrics::MeterProviderBuilder;
         use opentelemetry_sdk::metrics::PeriodicReader;
@@ -518,10 +545,11 @@ impl SimApp {
         Ok(meter_provider)
     }
 
-    #[cfg(feature = "tracing")]
+    #[cfg(all(feature = "tracing", feature = "tracing-otlp"))]
     fn init_tracer_provider(&self) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, SimErrorAny> {
         use opentelemetry_sdk::trace::RandomIdGenerator;
         use opentelemetry_sdk::trace::Sampler;
+        use opentelemetry_sdk::trace::SdkTracerProvider;
 
         let exporter = opentelemetry_otlp::SpanExporter::builder().with_tonic().build()?;
 
@@ -535,19 +563,95 @@ impl SimApp {
             .build())
     }
 
-    #[cfg(feature = "tracing")]
-    fn setup_tracing(&self, cli: &Cli) -> Result<(), SimErrorAny> {
-        use std::io;
-        use std::process;
-        use std::sync::Mutex;
-
+    #[cfg(all(feature = "tracing", feature = "tracing-otlp"))]
+    #[allow(clippy::type_complexity)]
+    fn setup_tracing_otlp<R>(
+        &self,
+        registry: R,
+    ) -> Result<
+        tracing_subscriber::layer::Layered<
+            tracing_opentelemetry::MetricsLayer<
+                tracing_subscriber::layer::Layered<
+                    tracing_opentelemetry::OpenTelemetryLayer<R, opentelemetry_sdk::trace::Tracer>,
+                    R,
+                >,
+            >,
+            tracing_subscriber::layer::Layered<
+                tracing_opentelemetry::OpenTelemetryLayer<R, opentelemetry_sdk::trace::Tracer>,
+                R,
+            >,
+        >,
+        SimErrorAny,
+    >
+    where
+        R: tracing_subscriber::layer::SubscriberExt + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
         use opentelemetry::trace::TracerProvider;
-        use tracing_loki::url::Url;
         use tracing_opentelemetry::MetricsLayer;
         use tracing_opentelemetry::OpenTelemetryLayer;
-        use tracing_subscriber::fmt::format::FmtSpan;
         use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
+
+        let meter_provider = self.init_meter_provider()?;
+        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder().with_tonic().build()?;
+        let _ = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(otlp_exporter)
+            .build();
+
+        let tracer_provider = self.init_tracer_provider()?;
+        let tracer = tracer_provider.tracer("wb_cache::company");
+
+        Ok(registry
+            .with(OpenTelemetryLayer::new(tracer))
+            .with(MetricsLayer::new(meter_provider.clone())))
+    }
+
+    #[cfg(all(feature = "tracing", feature = "tracing-loki"))]
+    fn setup_tracing_loki<R>(
+        &self,
+        registry: R,
+    ) -> Result<tracing_subscriber::layer::Layered<tracing_loki::Layer, R>, SimErrorAny>
+    where
+        R: tracing_subscriber::layer::SubscriberExt + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
+        use std::process;
+
+        let url = self.cli()?.loki_url();
+
+        let (loki, loki_task) = tracing_loki::builder()
+            .label("app", "wb_cache::company")?
+            .extra_field("pid", format!("{}", process::id()))?
+            .build_url(url)?;
+
+        tokio::spawn(loki_task);
+
+        Ok(registry.with(loki))
+    }
+
+    #[cfg(all(feature = "tracing", feature = "tracing-file"))]
+    #[allow(clippy::type_complexity)]
+    fn setup_tracing_file<R>(
+        &self,
+        registry: R,
+    ) -> Result<
+        tracing_subscriber::layer::Layered<
+            tracing_subscriber::fmt::Layer<
+                R,
+                tracing_subscriber::fmt::format::DefaultFields,
+                tracing_subscriber::fmt::format::Format,
+                ::std::sync::Mutex<Box<dyn std::io::Write + Send + 'static>>,
+            >,
+            R,
+        >,
+        SimErrorAny,
+    >
+    where
+        R: tracing_subscriber::layer::SubscriberExt + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
+        use std::io;
+        use std::sync::Mutex;
+        use tracing_subscriber::fmt::format::FmtSpan;
+
+        let cli = self.cli()?;
 
         let dest_writer = Mutex::new(if let Some(log_file) = cli.log_file() {
             let file = std::fs::OpenOptions::new()
@@ -560,35 +664,36 @@ impl SimApp {
             Box::new(io::stdout()) as Box<dyn io::Write + Send>
         });
 
-        let (_loki, loki_task) = tracing_loki::builder()
-            .label("app", "wb_cache::company")?
-            .extra_field("pid", format!("{}", process::id()))?
-            .build_url(Url::parse("http://127.0.0.1:3100").unwrap())?;
+        Ok(registry.with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(dest_writer)
+                .with_span_events(FmtSpan::FULL),
+        ))
+    }
+
+    #[cfg(feature = "tracing")]
+    fn setup_tracing(&self) -> Result<(), SimErrorAny> {
+        use tracing::info;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
 
         let filter = tracing_subscriber::EnvFilter::from_default_env();
-        let tracer_provider = self.init_tracer_provider()?;
-        let meter_provider = self.init_meter_provider()?;
-        let tracer = tracer_provider.tracer("wb_cache::company");
 
-        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder().with_tonic().build()?;
-        let _ = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-            .with_simple_exporter(otlp_exporter)
-            .build();
+        let tracing_registry = tracing_subscriber::registry();
+        let tracing_registry = tracing_registry.with(filter);
 
-        tracing_subscriber::registry()
-            .with(filter)
-            // .with(loki)
-            // .with(console_subscriber)
-            .with(OpenTelemetryLayer::new(tracer))
-            .with(MetricsLayer::new(meter_provider.clone()))
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(dest_writer)
-                    .with_span_events(FmtSpan::FULL),
-            )
-            .try_init()?;
+        #[cfg(all(feature = "tracing", feature = "tracing-otlp"))]
+        let tracing_registry = self.setup_tracing_otlp(tracing_registry)?;
 
-        tokio::spawn(loki_task);
+        #[cfg(all(feature = "tracing", feature = "tracing-loki"))]
+        let tracing_registry = self.setup_tracing_loki(tracing_registry)?;
+
+        #[cfg(all(feature = "tracing", feature = "tracing-file"))]
+        let tracing_registry = self.setup_tracing_file(tracing_registry)?;
+
+        tracing_registry.try_init()?;
+
+        info!("Tracing initialized");
 
         Ok(())
     }
@@ -599,7 +704,7 @@ impl SimApp {
         let cli = app.cli()?;
 
         #[cfg(feature = "tracing")]
-        app.setup_tracing(&cli)?;
+        app.setup_tracing()?;
 
         if cli.save() {
             return tokio::task::spawn_blocking(move || app.save_script()).await?;

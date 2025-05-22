@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use indicatif::ProgressBar;
 use sea_orm::prelude::*;
 use tokio::time::Instant;
+use tracing::debug;
 use tracing::instrument;
 
 use super::db::cache::DBProvider;
@@ -109,6 +110,8 @@ pub trait TestActor: DBProvider + Debug {
             }
 
             let step_name = format!("{step}");
+
+            debug!("Executing step {step_name}: {step:?}");
 
             err = match step {
                 Step::Title(title) => self.set_title(title),

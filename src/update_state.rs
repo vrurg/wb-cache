@@ -34,12 +34,14 @@ impl<DC> WBUpdateState<DC>
 where
     DC: WBDataController + Send + Sync + 'static,
 {
-    pub(crate) async fn on_new(&self, key: &DC::Key, value: DC::Value) -> Result<(), DC::Error> {
+    pub(crate) async fn on_new(&self, key: &DC::Key, value: &DC::Value) -> Result<WBDataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
-        *guard = parent.data_controller().on_new(key, &value).await?;
+        let mut dc_response = parent.data_controller().on_new(key, value).await?;
 
-        Ok(())
+        *guard = dc_response.update.take();
+
+        Ok(dc_response.op)
     }
 
     pub(crate) async fn on_change(
@@ -47,31 +49,31 @@ where
         key: &DC::Key,
         value: &DC::Value,
         old_value: DC::Value,
-    ) -> Result<(), DC::Error> {
+    ) -> Result<WBDataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
-        *guard = parent
+        let mut dc_response = parent
             .data_controller()
             .on_change(key, value, old_value, guard.take())
             .await?;
-        Ok(())
+        *guard = dc_response.update.take();
+        Ok(dc_response.op)
     }
 
-    pub(crate) async fn on_access(&self, key: &DC::Key, value: &DC::Value) -> Result<(), DC::Error> {
-        // log::debug!("UPDATE STATE ACCESS({key})");
+    pub(crate) async fn on_access(&self, key: &DC::Key, value: &DC::Value) -> Result<WBDataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
-        // log::debug!("updating '{key}' with DC on_access");
-        *guard = parent.data_controller().on_access(key, value, guard.take()).await?;
-        // log::debug!("updated '{key}' with DC on_access");
-        Ok(())
+        let mut dc_response = parent.data_controller().on_access(key, value, guard.take()).await?;
+        *guard = dc_response.update.take();
+        Ok(dc_response.op)
     }
 
-    pub(crate) async fn on_delete(&self, key: &DC::Key) -> Result<(), DC::Error> {
+    pub(crate) async fn on_delete(&self, key: &DC::Key) -> Result<WBDataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
-        *guard = parent.data_controller().on_delete(key).await?;
-        Ok(())
+        let mut dc_response = parent.data_controller().on_delete(key, guard.as_ref()).await?;
+        *guard = dc_response.update.take();
+        Ok(dc_response.op)
     }
 }
 
