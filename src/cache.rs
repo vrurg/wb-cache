@@ -14,6 +14,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::future::Future;
 use std::hash::Hash;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -107,6 +108,7 @@ type WBUpdatesHash<DC> = HashMap<<DC as WBDataController>::Key, Arc<WBUpdateStat
     default(off),
     sync,
     builder(
+        post_build(initial_setup),
         doc("Builder object of [`WBCache`].", "", "See [`WBCache::builder()`] method."),
         method_doc("Implement builder pattern for [`WBCache`]."),
     )
@@ -137,21 +139,24 @@ where
     #[fieldx(get(copy), set, default(Duration::from_secs(10)))]
     flush_interval: Duration,
 
-    #[fieldx(vis(pub(crate)), lazy, clearer(private), get(clone), builder(off))]
-    cache: WBArcCache<DC>,
+    #[fieldx(vis(pub(crate)), set(private), builder(off))]
+    cache: Option<WBArcCache<DC>>,
 
     // Here we keep the ensured update records, i.e. those ready to be submitted back to the data controller for processing.
-    #[fieldx(vis(pub(crate)), lazy, predicate, clearer, get_mut, builder(off))]
+    #[fieldx(lock, vis(pub(crate)), set(private), get, get_mut, builder(off))]
     updates: WBUpdatesHash<DC>,
 
-    #[fieldx(private, clearer, lock, writer, get, set, builder(off))]
+    #[fieldx(private, clearer, writer, builder(off))]
     monitor_task: JoinHandle<()>,
 
     #[fieldx(get(copy), default(10))]
     monitor_tick_duration: u64,
 
-    #[fieldx(private, lazy, get(clone))]
-    monitor_notifier: Arc<tokio::sync::Notify>,
+    #[fieldx(private, get(clone), default(Arc::new(tokio::sync::Notify::new())))]
+    flush_notifier: Arc<tokio::sync::Notify>,
+
+    #[fieldx(private, get(clone), default(Arc::new(tokio::sync::Notify::new())))]
+    cleanup_notifier: Arc<tokio::sync::Notify>,
 
     #[fieldx(lock, private, get(copy), set, builder(off), default(Instant::now()))]
     last_flush: Instant,
@@ -159,34 +164,33 @@ where
     #[fieldx(mode(async), private, lock, get, builder("_observers", private), default)]
     observers: Vec<Box<dyn WBObserver<DC>>>,
 
-    #[fieldx(private, lock, set, get(copy), builder(off), default)]
-    shutdown: bool,
+    #[fieldx(mode(async), private, writer, set, get(copy), builder(off), default)]
+    closed: bool,
+
+    #[fieldx(builder(off), default(false.into()))]
+    shutdown: AtomicBool,
 }
 
 impl<DC> WBCache<DC>
 where
     DC: WBDataController,
 {
-    fn build_cache(&self) -> WBArcCache<DC> {
-        let myself = self.myself().unwrap();
-        Arc::new(
+    fn initial_setup(mut self) -> Self {
+        *self.closed.blocking_write() = false;
+        self.set_updates(HashMap::with_capacity(self.max_updates() as usize));
+        self.set_cache(Some(Arc::new(
             Cache::builder()
                 .max_capacity(self.max_capacity())
                 .name(self.clear_name().unwrap_or_else(|| std::any::type_name::<DC::Value>()))
                 .eviction_policy(EvictionPolicy::tiny_lfu())
-                .eviction_listener(move |key, _value, removal_cause| {
-                    debug!("{} cache eviction: {key:?}, ({removal_cause:?})", myself.name());
-                })
                 .build(),
-        )
+        )));
+
+        self
     }
 
-    fn build_updates(&self) -> HashMap<DC::Key, Arc<WBUpdateState<DC>>> {
-        HashMap::with_capacity(self.max_updates() as usize)
-    }
-
-    fn build_monitor_notifier(&self) -> Arc<tokio::sync::Notify> {
-        Arc::new(tokio::sync::Notify::new())
+    fn cache(&self) -> WBArcCache<DC> {
+        Arc::clone(self.cache.as_ref().expect("Internal error: cache not initialized"))
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -448,7 +452,7 @@ where
         value: Option<&DC::Value>,
     ) -> Result<Arc<WBUpdateState<DC>>, DC::Error> {
         let update_state;
-        self.check_monitor_task().await;
+        self.check_task().await;
         {
             let mut updates = self.updates_mut();
 
@@ -569,7 +573,7 @@ where
     }
 
     // Remove succesfully written updates from the pool.
-    fn _clear_updates(&self, update_iter: Arc<WBUpdateIterator<DC>>) -> usize {
+    fn _purify_updates(&self, update_iter: Arc<WBUpdateIterator<DC>>) -> usize {
         // First of all, ensure minimal overhead on lock acquisition. The operation itself is not going to take too long
         // and must be deadlock-free as well.
         let mut updates = self.updates_mut();
@@ -602,7 +606,7 @@ where
         update_iter.reset();
 
         self.data_controller().write_back(update_iter.clone()).await?;
-        let updates_count = self._clear_updates(update_iter);
+        let updates_count = self._purify_updates(update_iter);
         self.set_last_flush(Instant::now());
 
         Ok(updates_count)
@@ -626,7 +630,7 @@ where
     #[instrument(level = "trace")]
     pub async fn soft_flush(&self) -> Result<(), Arc<DC::Error>> {
         check_error!(self);
-        self.monitor_notifier().notify_waiters();
+        self.flush_notifier().notify_waiters();
         Ok(())
     }
 
@@ -661,7 +665,7 @@ where
                 .expect("Internal error: WBUpdateIterator builder failure");
 
                 self.data_controller().write_back(update_iter.clone()).await?;
-                return Ok(self._clear_updates(update_iter));
+                return Ok(self._purify_updates(update_iter));
             }
         }
         Ok(0)
@@ -671,20 +675,28 @@ where
     async fn monitor_updates(&self) {
         let flush_interval = self.flush_interval();
         let mut ticking_interval = interval(Duration::from_millis(self.monitor_tick_duration()));
+        ticking_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let max_updates = self.max_updates() as usize;
+        // Obtain the exclusive lock on the closed flag. This will be released when the task is finished. This
+        // behavior allows the `close` method to wait for the task to finish before returning.
+        let mut closed_guard = self.write_closed().await;
 
         loop {
-            if self.shutdown() {
-                // The cache is shutting down. No need to flush anything.
-                return;
+            if *closed_guard {
+                break;
             }
 
             let mut forced = false;
-            let notifier = self.monitor_notifier();
+            let flush_notifier = self.flush_notifier();
+            let cleanup_notifier = self.cleanup_notifier();
             tokio::select! {
-                _ = notifier.notified() => {
+                _ = flush_notifier.notified() => {
                     // The flush was requested manually. Reset the timer.
-                    ticking_interval.reset();
+                    forced = true;
+                }
+                _ = cleanup_notifier.notified() => {
+                    // The cleanup was requested manually. Reset the timer.
+                    *closed_guard = true;
                     forced = true;
                 }
                 _ = ticking_interval.tick() => {
@@ -693,8 +705,8 @@ where
             }
 
             if self.updates().is_empty() {
-                // Don't consume resources if no updates have been produced during the last flush interval.
-                break;
+                // Don't consume resources if no updates have been produced.
+                continue;
             }
 
             if forced || self.updates().len() > max_updates || self.last_flush().elapsed() >= flush_interval {
@@ -708,13 +720,13 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn check_monitor_task(&self) {
-        if self.shutdown() {
+    async fn check_task(&self) {
+        if self.is_shut_down() {
             return;
         }
 
         let mut task_guard = self.write_monitor_task();
-        if self.flush_interval() != Duration::ZERO && task_guard.as_ref().map_or(true, |t| t.is_finished()) {
+        if task_guard.as_ref().map_or(true, |t| t.is_finished()) {
             let async_self = self.myself().unwrap();
             *task_guard = Some(tokio::spawn(async move { async_self.monitor_updates().await }));
         }
@@ -810,21 +822,22 @@ where
     #[instrument(level = "trace")]
     pub async fn close(&self) -> Result<(), Arc<DC::Error>> {
         check_error!(self);
-        self.set_shutdown(true);
-        if let Some(monitor) = self.clear_monitor_task() {
-            self.monitor_notifier().notify_waiters();
-            tokio::pin!(monitor);
-            tokio::select! {
-                _ = &mut monitor => (),
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                    wbc_event!(self, on_debug(&format!("[{}] Monitor task didn't finish in time.", self.name())));
-                    let _ = &mut monitor.abort();
-                }
-            }
+
+        if self.is_shut_down() {
+            return Ok(());
         }
-        let _ = self.flush().await;
-        self.clear_cache();
+
+        self.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cleanup_notifier().notify_waiters();
+
+        // This will block until the monitor task is finished.
+        let _ = self.write_closed().await;
+
         Ok(())
+    }
+
+    fn is_shut_down(&self) -> bool {
+        self.shutdown.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

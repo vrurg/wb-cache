@@ -77,12 +77,11 @@ where
     async fn on_flush(&self, _cache_updates: Arc<WBUpdateIterator<DC>>) -> Result<(), DC::Error> {
         Ok(())
     }
-
     async fn on_flush_one(&self, _updates: &DC::Key, _update: &DC::CacheUpdate) -> Result<(), Arc<DC::Error>> {
         Ok(())
     }
-
     async fn on_monitor_error(&self, _error: &Arc<DC::Error>) {}
-
+    async fn on_error(&self, _error: Arc<DC::Error>) {}
+    async fn on_warning(&self, _message: &str) {}
     async fn on_debug(&self, _message: &str) {}
 }

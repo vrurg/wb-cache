@@ -245,9 +245,9 @@ impl SimApp {
         self.cli()
     }
 
-    fn build_script_writer(&self) -> Result<Arc<ScriptWriter>, SimErrorAny> {
+    fn build_script_writer(&self) -> Result<Arc<ScriptWriter>> {
         let cli = self.cli()?;
-        ScriptWriter::builder()
+        Ok(ScriptWriter::builder()
             .period(cli.period() as i32)
             .product_count(cli.products() as i32)
             .initial_customers(cli.initial_customers())
@@ -257,7 +257,7 @@ impl SimApp {
             .min_customer_orders(cli.min_customer_orders() as f64)
             .max_customer_orders(cli.max_customer_orders() as f64)
             .return_window(cli.return_window() as i32)
-            .build()
+            .build()?)
     }
 
     fn build_tempdir(&self) -> Result<tempfile::TempDir, SimErrorAny> {

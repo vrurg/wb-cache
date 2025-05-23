@@ -47,7 +47,6 @@ use super::db::entity::Session as DbSession;
 use super::types::simerr;
 use super::types::OrderStatus;
 use super::types::Result;
-use super::types::SimErrorAny;
 
 thread_local! {
     static BATCH_STEPS: RefCell<Vec<Step>> = const { RefCell::new(Vec::new()) };
@@ -107,7 +106,7 @@ impl TaskResult {
 }
 
 /// Generate a scenario to be executed by the Company simulator.
-#[fx_plus(parent, sync, rc, builder(error(SimErrorAny), post_build, opt_in))]
+#[fx_plus(parent, sync, rc, builder(post_build, opt_in))]
 pub struct ScriptWriter {
     /// For how many days the scenario will run.
     #[fieldx(default(365), builder)]
@@ -206,8 +205,8 @@ pub struct ScriptWriter {
     #[fieldx(lazy, get(clone))]
     random_pool: Arc<RndPool>,
 
-    #[fieldx(lazy, get)]
-    customer_model: CustomerModel,
+    #[fieldx(builder(off))]
+    customer_model: Option<CustomerModel>,
 
     #[fieldx(lazy, get)]
     product_price_model: Arc<ProductModel>,
@@ -237,8 +236,10 @@ pub struct ScriptWriter {
 }
 
 impl ScriptWriter {
-    fn post_build(self: Arc<ScriptWriter>) -> Result<Arc<ScriptWriter>> {
+    fn post_build(mut self) -> Self {
         self.set_next_day_customers(self.initial_customers() as usize);
+
+        self.setup_customer_model();
 
         // Do not let the model saturate too quickly. Limit the expected growth so that it reaches 75% of the market
         // capacity at 4/5 of the total modeling period. This is a shortcoming of the Richards model:
@@ -246,7 +247,7 @@ impl ScriptWriter {
         self.customer_model()
             .adjust_growth_rate(self.customer_model().market_capacity() * 0.75, self.period * 4 / 5);
 
-        Ok(self)
+        self
     }
 
     pub fn create(&self) -> Result<Vec<Step>> {
@@ -1152,6 +1153,22 @@ impl ScriptWriter {
         .clone())
     }
 
+    pub fn customer_model(&self) -> &CustomerModel {
+        self.customer_model.as_ref().expect("Customer model not initialized")
+    }
+
+    fn setup_customer_model(&mut self) {
+        self.customer_model = Some(
+            CustomerModel::builder()
+                .initial_customers(self.initial_customers() as f64)
+                .market_capacity(self.market_capacity() as f64)
+                .inflection_point(self.inflection_point() as f64)
+                .growth_rate(self.growth_rate())
+                .build()
+                .unwrap(),
+        );
+    }
+
     fn build_worker_count(&self) -> usize {
         // Leave one core for the main thread, if possible.
         let threads = (num_cpus::get()).max(1);
@@ -1214,16 +1231,6 @@ impl ScriptWriter {
 
     fn build_total_backordered(&self) -> usize {
         self.backorders().iter().map(|bo| bo.len()).sum()
-    }
-
-    fn build_customer_model(&self) -> CustomerModel {
-        CustomerModel::builder()
-            .initial_customers(self.initial_customers() as f64)
-            .market_capacity(self.market_capacity() as f64)
-            .inflection_point(self.inflection_point() as f64)
-            .growth_rate(self.growth_rate())
-            .build()
-            .unwrap()
     }
 
     fn build_product_price_model(&self) -> Arc<ProductModel> {

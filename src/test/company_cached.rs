@@ -61,9 +61,12 @@ where
         _updates: Arc<WBUpdateIterator<OrderMgr<TestCompany<APP, D>>>>,
     ) -> Result<(), SimErrorAny> {
         let parent = self.parent();
-        parent
-            .app()?
-            .report_debug(format!("OrderObserver::on_flush: {}", _updates.len()));
+
+        // parent
+        //     .app()?
+        //     .report_debug(format!("OrderObserver::on_flush: {}", _updates.len()));
+        debug!("OrderObserver::on_flush: {}", _updates.len());
+
         parent.customer_cache()?.flush_raw().await?;
         Ok(())
     }
@@ -73,9 +76,9 @@ where
         key: &Uuid,
         update: &CacheUpdates<super::db::entity::order::ActiveModel>,
     ) -> Result<(), Arc<SimErrorAny>> {
-        self.parent()
-            .app()?
-            .report_debug(format!("OrderObserver::on_flush_one: {}", key));
+        // self.parent()
+        //     .app()?
+        //     .report_debug(format!("OrderObserver::on_flush_one: {}", key));
         debug!("OrderObserver::on_flush_one: {}", key);
 
         match update {
@@ -109,10 +112,10 @@ where
 
     async fn on_debug(&self, message: &str) {
         debug!("[orders] {}", message);
-        self.parent()
-            .app()
-            .unwrap()
-            .report_debug(format!("[orders] {}", message));
+        // self.parent()
+        //     .app()
+        //     .unwrap()
+        //     .report_debug(format!("[orders] {}", message));
     }
 }
 
@@ -133,9 +136,10 @@ where
         &self,
         updates: Arc<WBUpdateIterator<SessionMgr<TestCompany<APP, D>>>>,
     ) -> Result<(), SimErrorAny> {
-        self.parent()
-            .app()?
-            .report_debug(format!("SessionObserver::on_flush: {}", updates.len()));
+        debug!("SessionObserver::on_flush: {}", updates.len());
+        // self.parent()
+        //     .app()?
+        //     .report_debug(format!("SessionObserver::on_flush: {}", updates.len()));
 
         let mut customer_ids: HashSet<CustomerBy> = HashSet::new();
         while let Some(update) = updates.next() {
@@ -161,9 +165,9 @@ where
         key: &i64,
         update: &CacheUpdates<super::db::entity::session::ActiveModel>,
     ) -> Result<(), Arc<SimErrorAny>> {
-        self.parent()
-            .app()?
-            .report_debug(format!("SessionObserver::on_flush_one: {}", key));
+        // self.parent()
+        //     .app()?
+        //     .report_debug(format!("SessionObserver::on_flush_one: {}", key));
         debug!("SessionObserver::on_flush_one: {}", key);
 
         match update {
@@ -190,10 +194,10 @@ where
 
     async fn on_debug(&self, message: &str) {
         debug!("[sessions] {}", message);
-        self.parent()
-            .app()
-            .unwrap()
-            .report_debug(format!("[sessions] {}", message));
+        // self.parent()
+        //     .app()
+        //     .unwrap()
+        //     .report_debug(format!("[sessions] {}", message));
     }
 }
 

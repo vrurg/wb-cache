@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use fieldx::fxstruct;
 use rand_distr::Distribution;
@@ -25,10 +23,10 @@ pub struct ProductModel {
     top_price: f64,
     /// Lower bound of the most popular price range
     #[fieldx(default(1.0))]
-    top_low:   f64,
+    top_low: f64,
     /// Upper bound of the most popular price range
     #[fieldx(default(100.0))]
-    top_high:  f64,
+    top_high: f64,
     /// The expected share of the popular price range of all prices (normally - 2/3 of all)
     #[fieldx(default(2.0/3.0))]
     top_share: f64,
@@ -38,7 +36,7 @@ pub struct ProductModel {
     // Customer interest in the product
     /// The median price at which customer losts 1/2 of interest in the product, compared to the maximum.
     #[fieldx(default(300.))]
-    pivot_price:        f64,
+    pivot_price: f64,
     /// The higher the value – the steeper the interest loss curve around the pivot price.
     #[fieldx(default(0.005))]
     interest_loss_rate: f64,
@@ -50,13 +48,13 @@ pub struct ProductModel {
     interest_stability: f64,
 
     #[fieldx(lock, private, set, builder(off))]
-    mu:    f64,
+    mu: f64,
     #[fieldx(lock, private, set, builder(off))]
     sigma: f64,
 }
 
 impl ProductModel {
-    fn post_build(self: Arc<Self>) -> Arc<Self> {
+    fn post_build(self) -> Self {
         self.find_sigma();
         self
     }
