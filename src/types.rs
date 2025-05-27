@@ -65,3 +65,15 @@ where
     pub op: WBDataControllerOp,
     pub update: Option<DC::CacheUpdate>,
 }
+
+impl<DC> Debug for WBDataControllerResponse<DC>
+where
+    DC: WBDataController,
+{
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt.debug_struct("WBDataControllerResponse")
+            .field("op", &self.op)
+            .field("update", &self.update)
+            .finish()
+    }
+}

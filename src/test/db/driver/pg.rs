@@ -11,19 +11,19 @@ use crate::test::types::Result;
 use super::DatabaseDriver;
 
 #[derive(Debug)]
-#[fxstruct(sync, no_new, builder)]
+#[fxstruct(sync, rc, no_new, builder)]
 pub struct Pg {
     host: String,
     port: u16,
     user: String,
     password: String,
     database: String,
-    #[fieldx(builder(off))]
+    #[fieldx(inner_mut, get(off), set, builder(off))]
     connection: DatabaseConnection,
 }
 
 impl Pg {
-    pub async fn connect(mut self) -> Result<Self> {
+    pub async fn connect(&self) -> Result<()> {
         let schema = format!(
             "postgres://{}:{}@{}:{}/{}",
             self.user, self.password, self.host, self.port, self.database
@@ -35,18 +35,20 @@ impl Pg {
             .max_lifetime(Duration::from_secs(60))
             .test_before_acquire(true);
 
-        self.connection = sea_orm::Database::connect(opts)
-            .await
-            .inspect_err(|e| eprintln!("Error connecting to database {schema}: {e}"))?;
+        self.set_connection(
+            sea_orm::Database::connect(opts)
+                .await
+                .inspect_err(|e| eprintln!("Error connecting to database {schema}: {e}"))?,
+        );
 
-        Ok(self)
+        Ok(())
     }
 }
 
 #[async_trait]
 impl DatabaseDriver for Pg {
     fn connection(&self) -> DatabaseConnection {
-        self.connection.clone()
+        self.connection.read().clone()
     }
 
     async fn configure(&self) -> Result<()> {

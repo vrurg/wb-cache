@@ -16,12 +16,13 @@ use sea_orm::entity::prelude::*;
 use sea_orm::IntoActiveModel;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::debug;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "products")]
 #[serde(deny_unknown_fields)]
 pub struct Model {
-    #[sea_orm(primary_key)]
+    #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "i")]
     pub id: i32,
     #[serde(rename = "n")]
@@ -52,6 +53,7 @@ where
     DBCP: DBProvider,
 {
     pub async fn get_by_product_id(&self, product_id: i32) -> Result<Vec<Model>> {
+        debug!("Fetching product with ID: {}", product_id);
         Ok(Entity::find()
             .filter(Column::Id.eq(product_id))
             .all(&self.db_provider()?.db_connection()?)
@@ -79,6 +81,7 @@ where
     type Value = Model;
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>> {
+        debug!("Fetching product for ID key: {}", id);
         Ok(Entity::find_by_id(*id)
             .one(&self.db_provider()?.db_connection()?)
             .await?)
@@ -119,7 +122,7 @@ where
     }
 }
 
-impl<DBCP> WBDCCommon<Entity, DBCP> for Manager<DBCP>
+impl<DBCP> WBDCCommon<Entity, DBCP, true> for Manager<DBCP>
 where
     DBCP: DBProvider,
 {

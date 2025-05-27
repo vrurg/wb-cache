@@ -48,8 +48,8 @@ pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
     #[allow(clippy::type_complexity)]
     progress: Arc<Option<ProgressBar>>,
 
-    #[fieldx(get, builder(required))]
-    db: D,
+    #[fieldx(get(clone), builder(required))]
+    db: Arc<D>,
 
     #[fieldx(inner_mut, get(copy), set, default(0))]
     inv_check_no: u32,
@@ -299,7 +299,7 @@ where
     APP: TestApp,
     D: DatabaseDriver,
 {
-    fn db_driver(&self) -> Result<&impl DatabaseDriver, SimErrorAny> {
+    fn db_driver(&self) -> Result<Arc<impl DatabaseDriver>, SimErrorAny> {
         Ok(self.db())
     }
 

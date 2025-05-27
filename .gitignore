@@ -4,3 +4,4 @@ __script.bin
 *.ipynb
 .vscode/launch.json
 .vscode/settings.json
+test_company_*.db

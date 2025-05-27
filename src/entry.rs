@@ -50,7 +50,8 @@ where
 
     #[instrument(level = "trace")]
     pub async fn value(&self) -> Result<&DC::Value, Arc<DC::Error>> {
-        self.parent().on_access(&self.key, &self.value).await
+        self.parent().on_access(&self.key, Arc::new(self.value.clone())).await?;
+        Ok(&self.value)
     }
 
     pub fn key(&self) -> &DC::Key {

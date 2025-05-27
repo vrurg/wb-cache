@@ -48,7 +48,7 @@ where
 }
 
 pub trait DBProvider: Sync + Send + 'static {
-    fn db_driver(&self) -> Result<&impl DatabaseDriver>;
+    fn db_driver(&self) -> Result<Arc<impl DatabaseDriver>>;
     fn db_connection(&self) -> Result<DatabaseConnection>;
 }
 

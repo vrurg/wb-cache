@@ -23,15 +23,26 @@ use garde::Validate;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use postcard::to_io;
+use sea_orm::entity::*;
+use sea_orm::query::*;
+use sea_orm::EntityTrait;
+use sea_orm::QueryOrder;
 use sea_orm_migration::MigratorTrait;
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
+use tokio_stream::StreamExt;
 use tracing::instrument;
 
 use super::actor::TestActor;
+use super::db;
 use super::db::driver::pg::Pg;
 use super::db::driver::sqlite::Sqlite;
 use super::db::driver::DatabaseDriver;
+use super::db::entity::Customers;
+use super::db::entity::InventoryRecords;
+use super::db::entity::Orders;
+use super::db::entity::Products;
+use super::db::entity::Sessions;
 use super::db::migrations::Migrator;
 use super::progress::MaybeProgress;
 use super::progress::POrder;
@@ -39,6 +50,7 @@ use super::progress::PStyle;
 use super::progress::ProgressUI;
 use super::scriptwriter::steps::Step;
 use super::scriptwriter::ScriptWriter;
+use super::types::simerr;
 use super::types::Result;
 use super::TestApp;
 
@@ -111,6 +123,11 @@ struct Cli {
     #[clap(long, short)]
     #[garde(custom(Self::with_file(&self.script)))]
     load: bool,
+
+    /// Test the results of the simulation by comparing two databases.
+    #[clap(long)]
+    #[garde(skip)]
+    test: bool,
 
     #[cfg_attr(feature = "sqlite", clap(long))]
     #[fieldx(get(copy, attributes_fn(cfg(feature = "sqlite"))))]
@@ -287,11 +304,126 @@ impl SimApp {
         Ok(())
     }
 
+    async fn compare_tables<E>(
+        &self,
+        table: &str,
+        key: E::Column,
+        name1: &str,
+        db1: Arc<impl DatabaseDriver>,
+        name2: &str,
+        db2: Arc<impl DatabaseDriver>,
+    ) -> Result<(), SimErrorAny>
+    where
+        E: EntityTrait,
+        E::Model: FromQueryResult + Sized + Send + Sync + PartialEq + Debug,
+    {
+        let conn1 = db1.connection();
+        let conn2 = db2.connection();
+
+        let mut paginator1 = E::find().order_by_asc(key).paginate(&conn1, 1000).into_stream();
+        let mut paginator2 = E::find().order_by_asc(key).paginate(&conn2, 1000).into_stream();
+
+        loop {
+            let page1 = paginator1.next().await;
+            let page2 = paginator2.next().await;
+
+            if page1.is_none() && page2.is_none() {
+                break;
+            }
+
+            if page1.is_none() {
+                return Err(simerr!("Table '{table}': {name2} has more records than {name1}"));
+            }
+            if page2.is_none() {
+                return Err(simerr!("Table '{table}': {name1} has more records than {name2}"));
+            }
+
+            let page1 = page1.unwrap()?;
+            let page2 = page2.unwrap()?;
+
+            if page1.len() != page2.len() {
+                return Err(simerr!(
+                    "Table '{table}': {name1} has {} records, {name2} has {} records",
+                    page1.len(),
+                    page2.len()
+                ));
+            }
+
+            for (record1, record2) in page1.iter().zip(page2.iter()) {
+                if record1 != record2 {
+                    return Err(simerr!(
+                        "Table '{table}': Records do not match: {name1} = {:?}, {name2} = {:?}",
+                        record1,
+                        record2
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // Implement the most straightforward test by comparing all records in all
+    // tables in both databases.
+    async fn test_db<D: DatabaseDriver>(&self, db_plain: Arc<D>, db_cached: Arc<D>) -> Result<(), SimErrorAny> {
+        self.compare_tables::<Customers>(
+            "customers",
+            db::entity::customer::Column::Id,
+            "plain",
+            db_plain.clone(),
+            "cached",
+            db_cached.clone(),
+        )
+        .await?;
+
+        self.compare_tables::<InventoryRecords>(
+            "inventory_records",
+            db::entity::inventory_record::Column::ProductId,
+            "plain",
+            db_plain.clone(),
+            "cached",
+            db_cached.clone(),
+        )
+        .await?;
+
+        self.compare_tables::<Products>(
+            "products",
+            db::entity::product::Column::Id,
+            "plain",
+            db_plain.clone(),
+            "cached",
+            db_cached.clone(),
+        )
+        .await?;
+
+        self.compare_tables::<Orders>(
+            "orders",
+            db::entity::order::Column::Id,
+            "plain",
+            db_plain.clone(),
+            "cached",
+            db_cached.clone(),
+        )
+        .await?;
+
+        self.compare_tables::<Sessions>(
+            "sessions",
+            db::entity::session::Column::Id,
+            "plain",
+            db_plain.clone(),
+            "cached",
+            db_cached.clone(),
+        )
+        .await?;
+
+        Ok(())
+    }
+
     #[instrument(level = "trace", skip(self, db_plain, db_cached, screenplay))]
     async fn execute_script<D: DatabaseDriver>(
         &self,
-        db_plain: D,
-        db_cached: D,
+        db_plain: Arc<D>,
+        db_cached: Arc<D>,
         screenplay: Arc<Vec<Step>>,
     ) -> Result<(), SimErrorAny> {
         let barrier = Arc::new(Barrier::new(2));
@@ -326,13 +458,14 @@ impl SimApp {
         let myself = self.myself().unwrap();
         let s1 = screenplay.clone();
         let b1 = barrier.clone();
+        let db_plain_async = db_plain.clone();
         tasks.spawn(async move {
-            myself.db_prepare(&db_plain).await?;
+            myself.db_prepare(&*db_plain_async).await?;
             b1.wait().await;
             let started = Instant::now();
             let plain_actor = agent_build!(
                 myself, crate::test::company_plain::TestCompany<Self, D> {
-                    db: db_plain
+                    db: db_plain_async
                 }
             )?;
             plain_actor.act(&s1).await.inspect_err(|err| {
@@ -345,13 +478,14 @@ impl SimApp {
         let s2 = screenplay.clone();
         let b2 = barrier.clone();
         let myself = self.myself().unwrap();
+        let db_cached_async = db_cached.clone();
         tasks.spawn(async move {
-            myself.db_prepare(&db_cached).await?;
+            myself.db_prepare(&*db_cached_async).await?;
             b2.wait().await;
             let started = Instant::now();
             let cached_actor = agent_build!(
                 myself, crate::test::company_cached::TestCompany<Self, D> {
-                    db: db_cached
+                    db: db_cached_async
                 }
             )?;
             cached_actor.act(&s2).await.inspect_err(|err| {
@@ -399,6 +533,10 @@ impl SimApp {
                 plain.as_secs_f64() / cached.as_secs_f64(),
                 1.0
             ));
+        }
+
+        if self.cli()?.test() {
+            self.test_db(db_plain, db_cached).await?;
         }
 
         Ok(())
@@ -472,18 +610,16 @@ impl SimApp {
                 .user(cli.pg_user())
                 .password(cli.pg_password())
                 .database(format!("{}_plain", cli.pg_db_prefix()))
-                .build()?
-                .connect()
-                .await?;
+                .build()?;
+            db_plain.connect().await?;
             let db_cached = Pg::builder()
                 .host(cli.pg_host())
                 .port(cli.pg_port())
                 .user(cli.pg_user())
                 .password(cli.pg_password())
                 .database(format!("{}_cached", cli.pg_db_prefix()))
-                .build()?
-                .connect()
-                .await?;
+                .build()?;
+            db_cached.connect().await?;
             self.execute_script(db_plain, db_cached, script.clone()).await?;
         }
 

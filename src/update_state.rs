@@ -47,23 +47,27 @@ where
     pub(crate) async fn on_change(
         &self,
         key: &DC::Key,
-        value: &DC::Value,
+        value: Arc<DC::Value>,
         old_value: DC::Value,
     ) -> Result<WBDataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
         let mut dc_response = parent
             .data_controller()
-            .on_change(key, value, old_value, guard.take())
+            .on_change(key, &*value, old_value, guard.take())
             .await?;
         *guard = dc_response.update.take();
         Ok(dc_response.op)
     }
 
-    pub(crate) async fn on_access(&self, key: &DC::Key, value: &DC::Value) -> Result<WBDataControllerOp, DC::Error> {
+    pub(crate) async fn on_access(
+        &self,
+        key: &DC::Key,
+        value: Arc<DC::Value>,
+    ) -> Result<WBDataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
-        let mut dc_response = parent.data_controller().on_access(key, value, guard.take()).await?;
+        let mut dc_response = parent.data_controller().on_access(key, &value, guard.take()).await?;
         *guard = dc_response.update.take();
         Ok(dc_response.op)
     }

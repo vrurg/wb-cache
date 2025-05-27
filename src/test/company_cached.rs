@@ -136,10 +136,10 @@ where
         &self,
         updates: Arc<WBUpdateIterator<SessionMgr<TestCompany<APP, D>>>>,
     ) -> Result<(), SimErrorAny> {
-        debug!("SessionObserver::on_flush: {}", updates.len());
         // self.parent()
         //     .app()?
         //     .report_debug(format!("SessionObserver::on_flush: {}", updates.len()));
+        debug!("SessionObserver::on_flush: {}", updates.len());
 
         let mut customer_ids: HashSet<CustomerBy> = HashSet::new();
         while let Some(update) = updates.next() {
@@ -222,8 +222,8 @@ pub struct TestCompany<APP: TestApp, D: DatabaseDriver> {
     #[fieldx(lazy, get("_progress", private, clone), fallible)]
     progress: Arc<Option<ProgressBar>>,
 
-    #[fieldx(get, builder(required))]
-    db: D,
+    #[fieldx(get(clone), builder(required))]
+    db: Arc<D>,
 
     #[fieldx(inner_mut, get(copy), set, default(0))]
     inv_check_no: u32,
@@ -403,6 +403,8 @@ where
 
     #[instrument(level = "trace", skip(self, _db))]
     async fn add_customer(&self, _db: &DatabaseConnection, customer: &Customer) -> Result<(), SimError> {
+        let mut customer = customer.clone();
+        customer.registered_on = self.current_day();
         self.customer_cache()?.insert(customer.clone()).await?;
         Ok(())
     }
@@ -431,7 +433,11 @@ where
             order.id, order.product_id, order.quantity, order.status
         );
         self.update_inventory(db, order).await?;
+
+        let mut order = order.clone();
+        order.purchased_on = self.current_day();
         self.order_cache()?.insert(order.clone()).await?;
+
         Ok(())
     }
 
@@ -588,7 +594,7 @@ where
                 .and_try_compute_with(async |entry| {
                     if let Some(entry) = entry {
                         let session = entry.into_value();
-                        if session.expires_on < self.current_day() {
+                        if session.expires_on <= self.current_day() {
                             // Session expired
                             Ok(cache::Op::Remove)
                         } else {
@@ -631,7 +637,7 @@ where
     APP: TestApp,
     D: DatabaseDriver,
 {
-    fn db_driver(&self) -> Result<&impl DatabaseDriver, SimErrorAny> {
+    fn db_driver(&self) -> Result<Arc<impl DatabaseDriver>, SimErrorAny> {
         Ok(self.db())
     }
 

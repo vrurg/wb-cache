@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use fieldx::fxstruct;
@@ -20,7 +21,7 @@ pub struct Sqlite {
 }
 
 impl Sqlite {
-    pub async fn connect(db_dir: &Path, db_name: &str) -> Result<Self> {
+    pub async fn connect(db_dir: &Path, db_name: &str) -> Result<Arc<Self>> {
         let db_path = db_dir.join(db_name);
 
         let schema = format!("sqlite://{}?mode=rwc", db_path.display());
@@ -28,7 +29,7 @@ impl Sqlite {
             .await
             .inspect_err(|e| eprintln!("Error connecting to database {schema}: {e}"))?;
 
-        Ok(Self { connection: db })
+        Ok(Arc::new(Self { connection: db }))
     }
 }
 

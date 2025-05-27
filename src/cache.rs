@@ -176,7 +176,7 @@ where
     DC: WBDataController,
 {
     fn initial_setup(mut self) -> Self {
-        *self.closed.blocking_write() = false;
+        self.closed = false.into();
         self.set_updates(HashMap::with_capacity(self.max_updates() as usize));
         self.set_cache(Some(Arc::new(
             Cache::builder()
@@ -218,9 +218,7 @@ where
     {
         let myself = self.myself().unwrap();
 
-        debug!("get_and_try_compute_with_primary(key: {key:?})");
-
-        self.maybe_flush_one(key).await?;
+        debug!("[{}] get_and_try_compute_with_primary(key: {key:?})", myself.name());
 
         let result = self
             .cache()
@@ -252,17 +250,14 @@ where
                             }
                         }
 
-                        myself.on_delete(key, old_v).await?;
-                        Op::Remove
+                        myself.on_delete(key, old_v.map(Arc::new)).await?
                     }
                     Op::Put(v) => {
-                        let v = v;
+                        let v = Arc::new(v);
                         if let Some(old_v) = old_v {
-                            myself.on_change(key, &v, old_v).await?;
-                            Op::Put(ValueState::Primary(v))
+                            myself.on_change(key, v, old_v).await?
                         } else {
-                            myself.on_new(key, v.clone()).await?;
-                            Op::Nop
+                            myself.on_new(key, v).await?
                         }
                     }
                     Op::Nop => {
@@ -307,10 +302,12 @@ where
             .cache()
             .entry(key.clone())
             .and_try_compute_with(|entry| async {
-                let mut primary_key = if let Some(entry) = entry {
+                let primary_key = if let Some(entry) = entry {
                     Some(match entry.into_value() {
                         ValueState::Secondary(k) => k,
-                        _ => panic!("Non-secondary cache entry of key '{key}'"),
+                        _ => panic!(
+                            "Key '{key}' is submitted as a secondary but the corresponding cache entry is primary"
+                        ),
                     })
                 } else {
                     self.get_primary_key_from(key).await?
@@ -318,8 +315,8 @@ where
 
                 let secondary_key = key.clone();
 
-                let result = if let Some(ref pk) = primary_key {
-                    self.get_and_try_compute_with_primary(pk, |entry| async move {
+                let result = if let Some(ref pkey) = primary_key {
+                    self.get_and_try_compute_with_primary(pkey, |entry| async move {
                         let secondary_entry = if let Some(entry) = entry {
                             // Some(WBEntry::new(&myself, secondary_key, entry.value().await?.clone()))
                             // XXX Temporary!
@@ -335,13 +332,15 @@ where
                     })
                     .await?
                 } else {
+                    // We don't know the primary key yet. Get the user's response and see what to do with it.
+                    // Since the primary key will be known only if the user has provided a value it is only possible
+                    // to use the get_and_try_compute_with_primary method if Op::Put is returned.
                     match f(None).await? {
                         Op::Nop | Op::Remove => WBCompResult::StillNone(Arc::new(secondary_key)),
                         Op::Put(new_value) => {
                             let pkey = myself.data_controller().primary_key_of(&new_value);
-                            myself.on_new(&pkey, new_value.clone()).await?;
-                            primary_key = Some(pkey);
-                            WBCompResult::Inserted(WBEntry::new(&myself, secondary_key, new_value))
+                            self.get_and_try_compute_with_primary(&pkey, |_| async { Ok(Op::Put(new_value)) })
+                                .await?
                         }
                     }
                 };
@@ -394,7 +393,7 @@ where
                         v
                     } else {
                         let new_value = init.await?;
-                        self.on_new(key, new_value.clone()).await?;
+                        self.on_new(key, Arc::new(new_value.clone())).await?;
                         new_value
                     },
                 ))
@@ -426,8 +425,7 @@ where
                 } else {
                     let new_value = init.await?;
                     let pkey = self.data_controller().primary_key_of(&new_value);
-                    self.on_new(&pkey, new_value.clone()).await?;
-                    self.cache().insert(pkey.clone(), ValueState::Primary(new_value)).await;
+                    self.insert(new_value).await?;
                     pkey
                 };
 
@@ -445,12 +443,18 @@ where
 
     // This method ensures that each thread locks the entire cache only for the duration required to create a new hash
     // entry.
-    #[instrument(level = "trace", skip(self))]
-    pub(crate) async fn get_update_state(
+    #[instrument(level = "trace", skip(self, f))]
+    #[allow(clippy::type_complexity)]
+    pub(crate) async fn get_update_state_and_compute<'a, F, Fut>(
         &self,
-        key: &DC::Key,
-        value: Option<&DC::Value>,
-    ) -> Result<Arc<WBUpdateState<DC>>, DC::Error> {
+        key: &'a DC::Key,
+        value: Option<Arc<DC::Value>>,
+        f: F,
+    ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error>
+    where
+        F: FnOnce(&'a DC::Key, Option<Arc<DC::Value>>, Arc<WBUpdateState<DC>>) -> Fut,
+        Fut: Future<Output = Result<WBDataControllerOp, DC::Error>>,
+    {
         let update_state;
         self.check_task().await;
         {
@@ -463,6 +467,7 @@ where
             }
 
             let update_key = value
+                .as_ref()
                 .map(|v| self.data_controller().primary_key_of(v))
                 .unwrap_or(key.clone());
 
@@ -472,9 +477,17 @@ where
             } else {
                 update_state = updates.get(&update_key).unwrap().clone();
             }
+            // At this point, the update state has at least two references, which protects it from being collected by
+            // the _purify_updates method.
         };
 
-        Ok(update_state)
+        let op = f(key, value.as_ref().map(Arc::clone), Arc::clone(&update_state)).await?;
+
+        // There is a chance that if the update was empty when fetched, it was collected by the _purify_updates method.
+        // For security reasons, we insert the update back into the pool unconditionally.
+        self.updates_mut().insert(key.clone(), update_state.clone());
+
+        self._on_dc_op(op, key, value).await
     }
 
     #[allow(dead_code)]
@@ -515,10 +528,11 @@ where
             .await?
             .and_try_compute_with(|_| async { Ok(Op::Nop) })
             .await?;
+
         Ok(match outcome {
             WBCompResult::Inserted(entry) | WBCompResult::Unchanged(entry) | WBCompResult::ReplacedWith(entry) => {
                 let value = entry.into_value();
-                self.on_access(key, &value).await?;
+                self.on_access(key, Arc::new(value.clone())).await?;
                 Some(value)
             }
             WBCompResult::StillNone(_) => None,
@@ -527,14 +541,30 @@ where
     }
 
     #[instrument(level = "trace")]
-    pub async fn insert(&self, value: DC::Value) -> Result<(), Arc<DC::Error>> {
+    pub async fn insert(&self, value: DC::Value) -> Result<Option<DC::Value>, Arc<DC::Error>> {
         check_error!(self);
         let key = self.data_controller().primary_key_of(&value);
-        Ok(self.on_new(&key, value).await?)
+        let res = self
+            .cache()
+            .entry(key.clone())
+            .and_try_compute_with(|_| async {
+                let op = self.on_new(&key, Arc::new(value)).await;
+                op
+            })
+            .await?;
+
+        match res {
+            CompResult::Inserted(entry) | CompResult::ReplacedWith(entry) | CompResult::Unchanged(entry) => {
+                let value = entry.into_value().into_value();
+                Ok(Some(value))
+            }
+            CompResult::StillNone(_) => Ok(None),
+            _ => panic!("Impossible result of insert operation: {res:?}"),
+        }
     }
 
     #[instrument(level = "trace")]
-    pub async fn delete(&self, key: &DC::Key) -> Result<(), Arc<DC::Error>> {
+    pub async fn delete(&self, key: &DC::Key) -> Result<Option<DC::Value>, Arc<DC::Error>> {
         check_error!(self);
         // let value = self.cache().remove(key).await;
         let result = self
@@ -543,13 +573,11 @@ where
             .and_try_compute_with(|entry| async move { Ok(if entry.is_some() { Op::Remove } else { Op::Nop }) })
             .await?;
 
-        match result {
-            WBCompResult::Removed(entry) => self.on_delete(&entry.key().clone(), Some(entry.into_value())).await?,
-            WBCompResult::StillNone(_) => (),
-            _ => panic!("Impossible result of removal operation: {result:?}"),
-        }
-
-        Ok(())
+        Ok(match result {
+            WBCompResult::Removed(entry) => Some(entry.into_value()),
+            WBCompResult::StillNone(_) => None,
+            _ => panic!("Impossible result of delete operation: {result:?}"),
+        })
     }
 
     #[instrument(level = "trace")]
@@ -579,6 +607,12 @@ where
         let mut updates = self.updates_mut();
         let count = 0;
         for (key, guard) in update_iter.worked_mut().iter() {
+            let update = updates.get_mut(key).unwrap();
+            if Arc::strong_count(update) > 1 {
+                // This update is being used somewhere else. We cannot remove it from the pool yet.
+                continue;
+            }
+
             // If the update entry has no update in it then it's been written and we can remove it from the pool.
             if guard.is_none() {
                 updates.remove(key);
@@ -637,6 +671,7 @@ where
     #[instrument(level = "trace")]
     pub async fn flush_one(&self, key: &DC::Key) -> Result<usize, Arc<DC::Error>> {
         check_error!(self);
+        // Use a local variable to avoid holding the lock on the updates pool for too long.
         let update = self.updates().get(key).cloned();
         if let Some(update) = update {
             // At this point we have two options if the update is not empty:
@@ -711,6 +746,7 @@ where
 
             if forced || self.updates().len() > max_updates || self.last_flush().elapsed() >= flush_interval {
                 // When last flush took place earlier than the flush interval ago...
+                debug!("[{}] DO flush() (forced: {forced})", self.name());
                 if let Err(error) = self.flush().await {
                     self.set_error(error.clone());
                     wbc_event!(self, on_monitor_error(&error));
@@ -732,80 +768,76 @@ where
         }
     }
 
-    async fn _on_op(&self, op: WBDataControllerOp, key: &DC::Key, value: Option<DC::Value>) -> Result<(), DC::Error> {
-        match op {
-            WBDataControllerOp::Nop => (),
+    async fn _on_dc_op(
+        &self,
+        op: WBDataControllerOp,
+        key: &DC::Key,
+        value: Option<Arc<DC::Value>>,
+    ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error> {
+        Ok(match op {
+            WBDataControllerOp::Nop => Op::Nop,
             WBDataControllerOp::Insert => {
                 if let Some(value) = value {
-                    self.cache().insert(key.clone(), ValueState::Primary(value)).await;
+                    Op::Put(ValueState::Primary(value.as_ref().clone()))
+                } else {
+                    Op::Nop
                 }
             }
-            WBDataControllerOp::Revoke => {
-                self.cache().invalidate(key).await;
-            }
+            WBDataControllerOp::Revoke => Op::Remove,
             WBDataControllerOp::Drop => {
-                self.cache().invalidate(key).await;
                 self.updates_mut().remove(key);
+                Op::Remove
             }
-        }
-
-        Ok(())
+        })
     }
 
     #[instrument(level = "trace")]
-    pub(crate) async fn on_new(&self, key: &DC::Key, value: DC::Value) -> Result<(), DC::Error> {
-        let op = self
-            .get_update_state(key, Some(&value))
-            .await?
-            .on_new(key, &value)
-            .await?;
-
-        debug!("on_new(key: {key:?}, value: {value:?}) -> {op:?}");
-        self._on_op(op, key, Some(value)).await?;
-
-        Ok(())
+    #[allow(clippy::type_complexity)]
+    pub(crate) async fn on_new(
+        &self,
+        key: &DC::Key,
+        value: Arc<DC::Value>,
+    ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error> {
+        self.get_update_state_and_compute(key, Some(value), |key, value, update_state| async move {
+            update_state.on_new(key, value.as_ref().unwrap()).await
+        })
+        .await
     }
 
     #[instrument(level = "trace")]
+    #[allow(clippy::type_complexity)]
     pub(crate) async fn on_change(
         &self,
         key: &DC::Key,
-        value: &DC::Value,
+        value: Arc<DC::Value>,
         old_val: DC::Value,
-    ) -> Result<(), Arc<DC::Error>> {
-        let op = self
-            .get_update_state(key, Some(value))
-            .await?
-            .on_change(key, value, old_val)
-            .await?;
+    ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error> {
+        self.get_update_state_and_compute(key, Some(value), |key, value, update_state| async move {
+            update_state.on_change(key, value.unwrap(), old_val).await
+        })
+        .await
+    }
 
-        self._on_op(op, key, Some(value.clone())).await?;
-
+    #[instrument(level = "trace")]
+    pub(crate) async fn on_access<'a>(&self, key: &DC::Key, value: Arc<DC::Value>) -> Result<(), DC::Error> {
+        self.get_update_state_and_compute(key, Some(value), |key, value, update_state| async move {
+            update_state.on_access(key, value.unwrap()).await
+        })
+        .await?;
         Ok(())
     }
 
     #[instrument(level = "trace")]
-    pub(crate) async fn on_access<'a>(
+    #[allow(clippy::type_complexity)]
+    pub(crate) async fn on_delete(
         &self,
         key: &DC::Key,
-        value: &'a DC::Value,
-    ) -> Result<&'a DC::Value, Arc<DC::Error>> {
-        let op = self
-            .get_update_state(key, Some(value))
-            .await?
-            .on_access(key, value)
-            .await?;
-
-        self._on_op(op, key, Some(value.clone())).await?;
-
-        Ok(value)
-    }
-
-    #[instrument(level = "trace")]
-    pub(crate) async fn on_delete(&self, key: &DC::Key, value: Option<DC::Value>) -> Result<(), Arc<DC::Error>> {
-        let op = self.get_update_state(key, value.as_ref()).await?.on_delete(key).await?;
-        self._on_op(op, key, value).await?;
-        Ok(())
+        value: Option<Arc<DC::Value>>,
+    ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error> {
+        self.get_update_state_and_compute(key, value, |key, _value, update_state| async move {
+            update_state.on_delete(key).await
+        })
+        .await
     }
 
     // If a key is in the updates but not in the cache, it means that to obtain its valid value, we need to flush it
