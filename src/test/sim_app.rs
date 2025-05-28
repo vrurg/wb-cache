@@ -52,6 +52,7 @@ use super::scriptwriter::steps::Step;
 use super::scriptwriter::ScriptWriter;
 use super::types::simerr;
 use super::types::Result;
+use super::types::SimError;
 use super::TestApp;
 
 use crate::test::types::SimErrorAny;
@@ -431,7 +432,7 @@ impl SimApp {
         let message_progress = self.progress_ui()?.acquire_progress(PStyle::Message, None);
         message_progress.maybe_set_prefix("Rate");
 
-        let mut tasks = JoinSet::<Result<(&'static str, Duration), SimErrorAny>>::new();
+        let mut tasks = JoinSet::<Result<(&'static str, Duration), SimError>>::new();
 
         let myself = self.myself().unwrap();
         tokio::spawn(async move {
