@@ -218,6 +218,7 @@ where
     {
         let myself = self.myself().unwrap();
 
+        self.maybe_flush_one(key).await?;
         debug!("[{}] get_and_try_compute_with_primary(key: {key:?})", myself.name());
 
         let result = self
