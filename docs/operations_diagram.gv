@@ -1,21 +1,21 @@
 digraph operations_diagram {
-    size="5";
+    size="2.5";
     ratio="fill";
     subgraph clusterTypes {
         style="dotted";
         color="#e8e8e8";
         fontname="Arial, Helvetica, sans-serif";
-        fontsize=10;
-        TypeList [shape="record", label="{Key | Value | CacheUpdate | Error }", fontname="American Typewriter", fontsize=9];
+        fontsize=8;
+        TypeList [shape="record", label="{Key | Value | CacheUpdate | Error }", fontname="American Typewriter", fontsize=8];
         label="Types";
     }
     subgraph clusterComponents {
         pencolor="#ffffff00";
         fontname="Arial, Helvetica, sans-serif";
-        fontsize=10;
-        edge [fontsize=8];
+        fontsize=8;
+        edge [fontsize=6];
         // node [width=1.5, fixedsize="true"];
-        node [shape="box", style="filled, rounded", fillcolor="#e8e8e8", fontname="American Typewriter Semibold", fontsize=12];
+        node [shape="box", style="filled, rounded", fillcolor="#e8e8e8", fontname="American Typewriter Semibold", fontsize=10];
         // Nodes
         Cache [label="Cache"];
         DataController [label="Data\nController"];
@@ -27,6 +27,6 @@ digraph operations_diagram {
         // Footer
         label="Components";
     }
-    DataController -> TypeList [label="defines", fontsize=8, fontname="Arial, Helvetica, sans-serif", weight=100, style="dashed", color="#a8a8a8", penwidth=1, tailport="e"];
-    TypeList -> Cache [label="uses", fontsize=8, fontname="Arial, Helvetica, sans-serif", weight=1, style="dashed", color="#a8a8a8", penwidth=0.5, headport="e", weight=0];
+    DataController -> TypeList [label="defines", fontsize=6, fontname="Arial, Helvetica, sans-serif", weight=100, style="dashed", color="#a8a8a8", penwidth=1, tailport="e"];
+    TypeList -> Cache [label="uses", fontsize=6, fontname="Arial, Helvetica, sans-serif", weight=1, style="dashed", color="#a8a8a8", penwidth=0.5, headport="e", weight=0];
 }
