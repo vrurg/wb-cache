@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::sync::Arc;
 
+use fieldx::error::FieldXError;
 use parking_lot::RwLock;
 use sea_orm::prelude::*;
 use sea_orm::DbErr;
@@ -44,6 +45,13 @@ impl SimError {
                 err.context(context);
             }
             Self::Sim(err) => err.context(context),
+        }
+    }
+
+    pub fn to_string_with_backtrace<S: Display>(&self, msg: S) -> String {
+        match self {
+            Self::Any(err) => err.to_string_with_backtrace(msg),
+            Self::Sim(err) => err.to_string_with_backtrace(msg),
         }
     }
 
@@ -97,11 +105,17 @@ impl From<DbErr> for SimError {
     }
 }
 
+impl From<FieldXError> for SimError {
+    fn from(err: FieldXError) -> Self {
+        Self::Any(SimErrorAny::from(err))
+    }
+}
+
 impl From<SimError> for SimErrorAny {
     fn from(err: SimError) -> Self {
         match err {
             SimError::Any(e) => e,
-            SimError::Sim(e) => simerr!("{}", e),
+            SimError::Sim(e) => simerr!("{e:?}"),
         }
     }
 }
@@ -142,21 +156,29 @@ impl SimErrorAny {
         *error = err;
     }
 
+    pub fn with_context<C>(self, context: C) -> Self
+    where
+        C: Display + Send + Sync + 'static,
+    {
+        self.context(context);
+        self
+    }
+
     pub fn to_string_with_backtrace<S: Display>(&self, msg: S) -> String {
         let inner = self.0.read();
         if env::var("RUST_BACKTRACE").is_ok() {
-            format!("{msg}: {}\n{}", inner, inner.backtrace())
+            format!("{msg}: {inner:?}")
         } else {
-            format!("{msg}: {}", inner)
+            format!("{msg}: {inner:#}")
         }
     }
 
     pub fn report_with_backtrace<S: Display>(&self, msg: S) {
         let inner = self.0.read();
         if env::var("RUST_BACKTRACE").is_ok() {
-            eprintln!("{msg}: {}\n{}", inner, inner.backtrace());
+            eprintln!("{msg}: {inner:?}");
         } else {
-            eprintln!("{msg}: {}", inner);
+            eprintln!("{msg}: {inner:#}");
         }
     }
 }
