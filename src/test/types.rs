@@ -142,11 +142,21 @@ impl SimErrorAny {
         *error = err;
     }
 
-    pub fn report_with_backtrace<S: Display>(&self, msg: S) {
+    pub fn to_string_with_backtrace<S: Display>(&self, msg: S) -> String {
+        let inner = self.0.read();
         if env::var("RUST_BACKTRACE").is_ok() {
-            eprintln!("{msg}\n{}", self.0.read().backtrace());
+            format!("{msg}: {}\n{}", inner, inner.backtrace())
         } else {
-            eprintln!("{msg}");
+            format!("{msg}: {}", inner)
+        }
+    }
+
+    pub fn report_with_backtrace<S: Display>(&self, msg: S) {
+        let inner = self.0.read();
+        if env::var("RUST_BACKTRACE").is_ok() {
+            eprintln!("{msg}: {}\n{}", inner, inner.backtrace());
+        } else {
+            eprintln!("{msg}: {}", inner);
         }
     }
 }

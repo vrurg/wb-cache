@@ -506,13 +506,13 @@ impl SimApp {
                 }
                 Ok(Err(err)) => {
                     all_success = false;
-                    err.report_with_backtrace(format!("{err:#}"));
+                    self.report_error(err.to_string_with_backtrace("An error occurred during actor execution"));
                     tasks.abort_all();
                 }
                 Err(err) => {
                     all_success = false;
                     let err = SimErrorAny::from(err);
-                    err.report_with_backtrace(format!("{err:#}"));
+                    self.report_error(err.to_string_with_backtrace("Actor errorred out"));
                     tasks.abort_all();
                 }
             }
