@@ -5,7 +5,6 @@ use crate::test::types::SimErrorAny;
 use crate::update_iterator::WBUpdateIterator;
 use crate::update_iterator::WBUpdateIteratorItem;
 use crate::wbdc_response;
-#[cfg(feature = "log")]
 use sea_orm::entity::Iterable;
 use sea_orm::ActiveModelTrait;
 use sea_orm::DatabaseConnection;
