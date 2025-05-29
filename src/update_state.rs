@@ -19,10 +19,10 @@ use tokio::sync::RwLock;
 // cache object to block on `updates` HashMap locks. The point is that it may take a while for a data controller to
 // process on_new, on_access and, perhaps, other requests and get back with a response. This 'while' is the time other
 // tasks would be waiting for the cache to become available again.
-#[fx_plus(child(WBCache<DC>, rc_strong), sync, rc, get(off), default(off))]
-pub(crate) struct WBUpdateState<DC>
+#[fx_plus(child(Cache<DC>, rc_strong), sync, rc, get(off), default(off))]
+pub(crate) struct UpdateState<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     #[fieldx(builder(off))]
     pub(crate) data: Arc<RwLock<Option<DC::CacheUpdate>>>,
@@ -30,11 +30,11 @@ where
 
 // !!! IMPORTANT NOTE TO MYSELF: never try to update parent's cache object here! We only take care of the single update
 // and do nothing else.
-impl<DC> WBUpdateState<DC>
+impl<DC> UpdateState<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
-    pub(crate) async fn on_new(&self, key: &DC::Key, value: &DC::Value) -> Result<WBDataControllerOp, DC::Error> {
+    pub(crate) async fn on_new(&self, key: &DC::Key, value: &DC::Value) -> Result<DataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
         let mut dc_response = parent.data_controller().on_new(key, value).await?;
@@ -49,7 +49,7 @@ where
         key: &DC::Key,
         value: Arc<DC::Value>,
         old_value: DC::Value,
-    ) -> Result<WBDataControllerOp, DC::Error> {
+    ) -> Result<DataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
         let mut dc_response = parent
@@ -60,11 +60,7 @@ where
         Ok(dc_response.op)
     }
 
-    pub(crate) async fn on_access(
-        &self,
-        key: &DC::Key,
-        value: Arc<DC::Value>,
-    ) -> Result<WBDataControllerOp, DC::Error> {
+    pub(crate) async fn on_access(&self, key: &DC::Key, value: Arc<DC::Value>) -> Result<DataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
         let mut dc_response = parent.data_controller().on_access(key, &value, guard.take()).await?;
@@ -72,7 +68,7 @@ where
         Ok(dc_response.op)
     }
 
-    pub(crate) async fn on_delete(&self, key: &DC::Key) -> Result<WBDataControllerOp, DC::Error> {
+    pub(crate) async fn on_delete(&self, key: &DC::Key) -> Result<DataControllerOp, DC::Error> {
         let mut guard = self.data.write().await;
         let parent = self.parent();
         let mut dc_response = parent.data_controller().on_delete(key, guard.as_ref()).await?;
@@ -81,11 +77,11 @@ where
     }
 }
 
-impl<DC> Debug for WBUpdateState<DC>
+impl<DC> Debug for UpdateState<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "WBUpdateState {{ {:?} }}", self.data)
+        write!(fmt, "UpdateState {{ {:?} }}", self.data)
     }
 }

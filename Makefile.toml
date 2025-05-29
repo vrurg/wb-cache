@@ -2,16 +2,12 @@ extend = "build-tools/std-makefile.toml"
 
 [env]
     #CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+    __DOT_ARGS__               = "-Gdpi=300"
     __MAKE_README_CRATE_ROOT__ = "."                              # In a workspace – a crate directory
     __MAKE_TEST_TASKS__        = "test-default test-combinations"
     __MAKE_TOOLCHAINS__        = "1.77 stable beta nightly"
 
 [config]
     default_to_workspace = false
-
-[tasks.graphs]
-    args    = ["-Tpng", "-Gdpi=300", "-o", "docs/operations_diagram.png", "docs/operations_diagram.gv"]
-    command = "dot"
-    watch   = { watch = ["./docs/operations_diagram.gv"] }
 
     # vim: ft=toml

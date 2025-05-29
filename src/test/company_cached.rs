@@ -18,9 +18,9 @@ use tracing::debug;
 use tracing::instrument;
 
 use crate::cache;
-use crate::traits::WBObserver;
-use crate::update_iterator::WBUpdateIterator;
-use crate::WBCache;
+use crate::traits::Observer;
+use crate::update_iterator::UpdateIterator;
+use crate::Cache;
 
 use super::actor::TestActor;
 use super::db::cache::CacheUpdates;
@@ -38,11 +38,11 @@ use super::types::SimError;
 use super::types::SimErrorAny;
 use super::TestApp;
 
-type CustomerCache<APP, D> = Arc<WBCache<CustomerMgr<TestCompany<APP, D>>>>;
-type InvRecCache<APP, D> = Arc<WBCache<InventoryRecordMgr<TestCompany<APP, D>>>>;
-type OrderCache<APP, D> = Arc<WBCache<OrderMgr<TestCompany<APP, D>>>>;
-type ProductCache<APP, D> = Arc<WBCache<ProductMgr<TestCompany<APP, D>>>>;
-type SessionCache<APP, D> = Arc<WBCache<SessionMgr<TestCompany<APP, D>>>>;
+type CustomerCache<APP, D> = Arc<Cache<CustomerMgr<TestCompany<APP, D>>>>;
+type InvRecCache<APP, D> = Arc<Cache<InventoryRecordMgr<TestCompany<APP, D>>>>;
+type OrderCache<APP, D> = Arc<Cache<OrderMgr<TestCompany<APP, D>>>>;
+type ProductCache<APP, D> = Arc<Cache<ProductMgr<TestCompany<APP, D>>>>;
+type SessionCache<APP, D> = Arc<Cache<SessionMgr<TestCompany<APP, D>>>>;
 
 #[fx_plus(child(TestCompany<APP, D>, unwrap), sync)]
 struct OrderObserver<APP, D>
@@ -51,15 +51,12 @@ where
     D: DatabaseDriver, {}
 
 #[async_trait]
-impl<APP, D> WBObserver<OrderMgr<TestCompany<APP, D>>> for OrderObserver<APP, D>
+impl<APP, D> Observer<OrderMgr<TestCompany<APP, D>>> for OrderObserver<APP, D>
 where
     APP: TestApp,
     D: DatabaseDriver,
 {
-    async fn on_flush(
-        &self,
-        _updates: Arc<WBUpdateIterator<OrderMgr<TestCompany<APP, D>>>>,
-    ) -> Result<(), SimErrorAny> {
+    async fn on_flush(&self, _updates: Arc<UpdateIterator<OrderMgr<TestCompany<APP, D>>>>) -> Result<(), SimErrorAny> {
         let parent = self.parent();
 
         // parent
@@ -127,15 +124,12 @@ where
     D: DatabaseDriver, {}
 
 #[async_trait]
-impl<APP, D> WBObserver<SessionMgr<TestCompany<APP, D>>> for SessionObserver<APP, D>
+impl<APP, D> Observer<SessionMgr<TestCompany<APP, D>>> for SessionObserver<APP, D>
 where
     APP: TestApp,
     D: DatabaseDriver,
 {
-    async fn on_flush(
-        &self,
-        updates: Arc<WBUpdateIterator<SessionMgr<TestCompany<APP, D>>>>,
-    ) -> Result<(), SimErrorAny> {
+    async fn on_flush(&self, updates: Arc<UpdateIterator<SessionMgr<TestCompany<APP, D>>>>) -> Result<(), SimErrorAny> {
         // self.parent()
         //     .app()?
         //     .report_debug(format!("SessionObserver::on_flush: {}", updates.len()));
@@ -273,7 +267,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
 
     fn build_customer_cache(&self) -> Result<CustomerCache<APP, D>, SimErrorAny> {
         let customer_cache = child_build!(self, CustomerMgr<TestCompany<APP, D>>)?;
-        Ok(WBCache::builder()
+        Ok(Cache::builder()
             .name("customers")
             .data_controller(customer_cache)
             .max_updates(self.market_capacity()? as u64)
@@ -284,7 +278,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
 
     fn build_inv_rec_cache(&self) -> Result<InvRecCache<APP, D>, SimErrorAny> {
         let inv_rec_cache = child_build!(self, InventoryRecordMgr<TestCompany<APP, D>>)?;
-        Ok(WBCache::builder()
+        Ok(Cache::builder()
             .name("inventory records")
             .data_controller(inv_rec_cache)
             .max_updates(self.product_count()? as u64)
@@ -298,7 +292,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
         let order_observer = child_build!(self, OrderObserver<APP,D>)?;
         // Cache size is set based on the expectation that we may need to re-process one order per day per customer.
         // Re-process means handling a refund or shipping a backordered one.
-        Ok(WBCache::builder()
+        Ok(Cache::builder()
             .name("orders")
             .data_controller(order_cache)
             .max_updates(self.market_capacity()? as u64 * 100)
@@ -310,7 +304,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
 
     fn build_product_cache(&self) -> Result<ProductCache<APP, D>, SimErrorAny> {
         let product_cache = child_build!(self, ProductMgr<TestCompany<APP, D>>)?;
-        Ok(WBCache::builder()
+        Ok(Cache::builder()
             .name("products")
             .data_controller(product_cache)
             .max_updates(self.product_count()? as u64)
@@ -322,7 +316,7 @@ impl<APP: TestApp, D: DatabaseDriver> TestCompany<APP, D> {
     fn build_session_cache(&self) -> Result<SessionCache<APP, D>, SimErrorAny> {
         let session_cache = child_build!(self, SessionMgr<TestCompany<APP, D>>)?;
         let session_observer = child_build!(self, SessionObserver<APP,D>)?;
-        Ok(WBCache::builder()
+        Ok(Cache::builder()
             .name("sessions")
             .data_controller(session_cache)
             .max_updates((self.market_capacity()? as u64 * 100).max(100_000))
@@ -604,7 +598,7 @@ where
                     } else {
                         // If the session ID was found in the database but not in the cache, it indicates that it was
                         // previously deleted but hadn't been flushed yet.
-                        // The scenario of a bug in the WBCache implementation is not considered here.
+                        // The scenario of a bug in the Cache implementation is not considered here.
                         Ok(cache::Op::Nop)
                     }
                 })

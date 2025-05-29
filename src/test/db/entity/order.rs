@@ -10,13 +10,13 @@ use serde::Serialize;
 
 use crate::test::db::cache::CacheUpdates;
 use crate::test::db::cache::DBProvider;
-use crate::test::db::cache::WBDCCommon;
+use crate::test::db::cache::DCCommon;
 use crate::test::types::OrderStatus;
 use crate::test::types::Result;
 use crate::test::types::SimErrorAny;
-use crate::types::WBDataControllerResponse;
-use crate::update_iterator::WBUpdateIterator;
-use crate::WBDataController;
+use crate::types::DataControllerResponse;
+use crate::update_iterator::UpdateIterator;
+use crate::DataController;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,7 +87,7 @@ where
 }
 
 #[async_trait]
-impl<DBCP> WBDataController for Manager<DBCP>
+impl<DBCP> DataController for Manager<DBCP>
 where
     DBCP: DBProvider,
 {
@@ -106,11 +106,11 @@ where
         value.id
     }
 
-    async fn write_back(&self, update_records: Arc<WBUpdateIterator<Self>>) -> Result<()> {
+    async fn write_back(&self, update_records: Arc<UpdateIterator<Self>>) -> Result<()> {
         self.wbdc_write_back(update_records).await
     }
 
-    async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<WBDataControllerResponse<Self>> {
+    async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<DataControllerResponse<Self>> {
         self.wbdbc_on_new(key, &value.clone().into_active_model()).await
     }
 
@@ -118,7 +118,7 @@ where
         &self,
         key: &Self::Key,
         update: Option<&CacheUpdates<ActiveModel>>,
-    ) -> Result<WBDataControllerResponse<Self>> {
+    ) -> Result<DataControllerResponse<Self>> {
         self.wbdc_on_delete(key, update).await
     }
 
@@ -128,12 +128,12 @@ where
         value: &Self::Value,
         old_value: Self::Value,
         prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<WBDataControllerResponse<Self>> {
+    ) -> Result<DataControllerResponse<Self>> {
         self.wbdc_on_change(key, value, old_value, prev_update).await
     }
 }
 
-impl<DBCP> WBDCCommon<Entity, DBCP, true> for Manager<DBCP>
+impl<DBCP> DCCommon<Entity, DBCP, true> for Manager<DBCP>
 where
     DBCP: DBProvider,
 {

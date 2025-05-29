@@ -1,30 +1,30 @@
+use crate::cache::Cache;
 use crate::cache::ValueState;
-use crate::cache::WBCache;
-use crate::traits::WBDataController;
+use crate::traits::DataController;
 use fieldx_plus::child_build;
 use fieldx_plus::fx_plus;
-use moka::Entry;
+use moka::Entry as MokaEntry;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::instrument;
 
-#[fx_plus(child(WBCache<DC>, rc_strong), sync, default(off))]
-pub struct WBEntry<DC>
+#[fx_plus(child(Cache<DC>, rc_strong), sync, default(off))]
+pub struct Entry<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     key: DC::Key,
     value: DC::Value,
 }
 
-impl<DC> WBEntry<DC>
+impl<DC> Entry<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
-    pub(crate) fn new(parent: &WBCache<DC>, key: DC::Key, value: DC::Value) -> Self {
+    pub(crate) fn new(parent: &Cache<DC>, key: DC::Key, value: DC::Value) -> Self {
         child_build!(
             parent,
-            WBEntry<DC> {
+            Entry<DC> {
                 key:   key,
                 value: value,
             }
@@ -35,12 +35,12 @@ where
     // Only valid for primaries
     #[instrument(level = "trace")]
     pub(crate) fn from_primary_entry(
-        parent: &WBCache<DC>,
-        entry: Entry<DC::Key, ValueState<DC::Key, DC::Value>>,
+        parent: &Cache<DC>,
+        entry: MokaEntry<DC::Key, ValueState<DC::Key, DC::Value>>,
     ) -> Self {
         child_build!(
             parent,
-            WBEntry<DC> {
+            Entry<DC> {
                 key: entry.key().clone(),
                 value: entry.into_value().into_value(),
             }
@@ -63,12 +63,12 @@ where
     }
 }
 
-impl<DC> Debug for WBEntry<DC>
+impl<DC> Debug for Entry<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WBEntry")
+        f.debug_struct("Entry")
             .field("key", &self.key)
             .field("value", &self.value)
             .finish()

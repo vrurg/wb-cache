@@ -1,13 +1,13 @@
-use crate::entry_selector::WBEntryKeySelector;
+use crate::entry_selector::EntryKeySelector;
 use crate::prelude::*;
-use crate::traits::WBObserver;
-use crate::update_iterator::WBUpdateIterator;
-use crate::update_state::WBUpdateState;
+use crate::traits::Observer;
+use crate::update_iterator::UpdateIterator;
+use crate::update_state::UpdateState;
 
 use fieldx_plus::child_build;
 use fieldx_plus::fx_plus;
-use moka::future::Cache;
-use moka::ops::compute::CompResult;
+use moka::future::Cache as MokaCache;
+use moka::ops::compute::CompResult as MokaCompResult;
 use moka::policy::EvictionPolicy;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -71,23 +71,22 @@ where
     }
 }
 
-type WBArcCache<DC> = Arc<
-    Cache<<DC as WBDataController>::Key, ValueState<<DC as WBDataController>::Key, <DC as WBDataController>::Value>>,
->;
-type WBUpdatesHash<DC> = HashMap<<DC as WBDataController>::Key, Arc<WBUpdateState<DC>>>;
+type ArcCache<DC> =
+    Arc<MokaCache<<DC as DataController>::Key, ValueState<<DC as DataController>::Key, <DC as DataController>::Value>>>;
+type UpdatesHash<DC> = HashMap<<DC as DataController>::Key, Arc<UpdateState<DC>>>;
 
 /// This is where all the magic happens!
 ///
 /// ```ignore
 /// let controller = MyDataController::new(host, port);
-/// let cache = WBCache::builder()
+/// let cache = Cache::builder()
 ///     .data_controller(controller)
 ///     .max_updates(1000)
 ///     .max_capacity(100_000)
 ///    .flush_interval(Duration::from_secs(10))
 ///    .build();
 ///
-/// // The key type is defined by the data controller implementation of WBDataController.
+/// // The key type is defined by the data controller implementation of DataController.
 /// cache.entry(key).await?
 ///     .and_try_compute_with(|entry| async {
 ///        let record = if let Some(entry) = entry {
@@ -109,13 +108,13 @@ type WBUpdatesHash<DC> = HashMap<<DC as WBDataController>::Key, Arc<WBUpdateStat
     sync,
     builder(
         post_build(initial_setup),
-        doc("Builder object of [`WBCache`].", "", "See [`WBCache::builder()`] method."),
-        method_doc("Implement builder pattern for [`WBCache`]."),
+        doc("Builder object of [`Cache`].", "", "See [`Cache::builder()`] method."),
+        method_doc("Implement builder pattern for [`Cache`]."),
     )
 )]
-pub struct WBCache<DC>
+pub struct Cache<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
     DC::Key: Send + Sync + 'static,
     DC::Error: Send + Sync + 'static,
 {
@@ -140,11 +139,11 @@ where
     flush_interval: Duration,
 
     #[fieldx(vis(pub(crate)), set(private), builder(off))]
-    cache: Option<WBArcCache<DC>>,
+    cache: Option<ArcCache<DC>>,
 
     // Here we keep the ensured update records, i.e. those ready to be submitted back to the data controller for processing.
     #[fieldx(lock, vis(pub(crate)), set(private), get, get_mut, builder(off))]
-    updates: WBUpdatesHash<DC>,
+    updates: UpdatesHash<DC>,
 
     #[fieldx(private, clearer, writer, builder(off))]
     monitor_task: JoinHandle<()>,
@@ -162,7 +161,7 @@ where
     last_flush: Instant,
 
     #[fieldx(mode(async), private, lock, get, builder("_observers", private), default)]
-    observers: Vec<Box<dyn WBObserver<DC>>>,
+    observers: Vec<Box<dyn Observer<DC>>>,
 
     #[fieldx(mode(async), private, writer, set, get(copy), builder(off), default)]
     closed: bool,
@@ -171,15 +170,15 @@ where
     shutdown: AtomicBool,
 }
 
-impl<DC> WBCache<DC>
+impl<DC> Cache<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn initial_setup(mut self) -> Self {
         self.closed = false.into();
         self.set_updates(HashMap::with_capacity(self.max_updates() as usize));
         self.set_cache(Some(Arc::new(
-            Cache::builder()
+            MokaCache::builder()
                 .max_capacity(self.max_capacity())
                 .name(self.clear_name().unwrap_or_else(|| std::any::type_name::<DC::Value>()))
                 .eviction_policy(EvictionPolicy::tiny_lfu())
@@ -189,7 +188,7 @@ where
         self
     }
 
-    fn cache(&self) -> WBArcCache<DC> {
+    fn cache(&self) -> ArcCache<DC> {
         Arc::clone(self.cache.as_ref().expect("Internal error: cache not initialized"))
     }
 
@@ -211,9 +210,9 @@ where
         &self,
         key: &DC::Key,
         f: F,
-    ) -> Result<WBCompResult<DC>, Arc<DC::Error>>
+    ) -> Result<CompResult<DC>, Arc<DC::Error>>
     where
-        F: FnOnce(Option<WBEntry<DC>>) -> Fut,
+        F: FnOnce(Option<Entry<DC>>) -> Fut,
         Fut: Future<Output = Result<Op<DC::Value>, DC::Error>>,
     {
         let myself = self.myself().unwrap();
@@ -228,14 +227,14 @@ where
                 let (wb_entry, old_v, fetched) = if let Some(entry) = entry {
                     let old_v = entry.into_value().into_value();
                     (
-                        Some(WBEntry::new(&myself, key.clone(), old_v.clone())),
+                        Some(Entry::new(&myself, key.clone(), old_v.clone())),
                         Some(old_v),
                         false,
                     )
                 } else {
                     let old_v = myself.data_controller().get_for_key(key).await?;
                     old_v.map_or((None, None, false), |v| {
-                        (Some(WBEntry::new(&myself, key.clone(), v.clone())), Some(v), true)
+                        (Some(Entry::new(&myself, key.clone(), v.clone())), Some(v), true)
                     })
                 };
 
@@ -276,24 +275,24 @@ where
             .await?;
 
         Ok(match result {
-            CompResult::Inserted(e) => WBCompResult::Inserted(WBEntry::from_primary_entry(self, e)),
-            CompResult::Removed(e) => WBCompResult::Removed(WBEntry::from_primary_entry(self, e)),
-            CompResult::ReplacedWith(e) => WBCompResult::ReplacedWith(WBEntry::from_primary_entry(self, e)),
-            CompResult::Unchanged(e) => WBCompResult::Unchanged(WBEntry::from_primary_entry(self, e)),
-            CompResult::StillNone(k) => WBCompResult::StillNone(k),
+            MokaCompResult::Inserted(e) => CompResult::Inserted(Entry::from_primary_entry(self, e)),
+            MokaCompResult::Removed(e) => CompResult::Removed(Entry::from_primary_entry(self, e)),
+            MokaCompResult::ReplacedWith(e) => CompResult::ReplacedWith(Entry::from_primary_entry(self, e)),
+            MokaCompResult::Unchanged(e) => CompResult::Unchanged(Entry::from_primary_entry(self, e)),
+            MokaCompResult::StillNone(k) => CompResult::StillNone(k),
         })
     }
 
-    // This method is for secondaries only. If WBCompResult wraps a WBEntry then the entry would have secondary key and
+    // This method is for secondaries only. If CompResult wraps an Entry then the entry would have secondary key and
     // the primary's value in it because this is what'd be expected by user.
     #[instrument(level = "trace", skip(self, f))]
     pub(crate) async fn get_and_try_compute_with_secondary<F, Fut>(
         &self,
         key: &DC::Key,
         f: F,
-    ) -> Result<WBCompResult<DC>, Arc<DC::Error>>
+    ) -> Result<CompResult<DC>, Arc<DC::Error>>
     where
-        F: FnOnce(Option<WBEntry<DC>>) -> Fut,
+        F: FnOnce(Option<Entry<DC>>) -> Fut,
         Fut: Future<Output = Result<Op<DC::Value>, DC::Error>>,
     {
         let myself = self.myself().unwrap();
@@ -319,13 +318,9 @@ where
                 let result = if let Some(ref pkey) = primary_key {
                     self.get_and_try_compute_with_primary(pkey, |entry| async move {
                         let secondary_entry = if let Some(entry) = entry {
-                            // Some(WBEntry::new(&myself, secondary_key, entry.value().await?.clone()))
+                            // Some(Entry::new(&myself, secondary_key, entry.value().await?.clone()))
                             // XXX Temporary!
-                            Some(WBEntry::new(
-                                &myself,
-                                secondary_key,
-                                entry.value().await.unwrap().clone(),
-                            ))
+                            Some(Entry::new(&myself, secondary_key, entry.value().await.unwrap().clone()))
                         } else {
                             None
                         };
@@ -337,7 +332,7 @@ where
                     // Since the primary key will be known only if the user has provided a value it is only possible
                     // to use the get_and_try_compute_with_primary method if Op::Put is returned.
                     match f(None).await? {
-                        Op::Nop | Op::Remove => WBCompResult::StillNone(Arc::new(secondary_key)),
+                        Op::Nop | Op::Remove => CompResult::StillNone(Arc::new(secondary_key)),
                         Op::Put(new_value) => {
                             let pkey = myself.data_controller().primary_key_of(&new_value);
                             self.get_and_try_compute_with_primary(&pkey, |_| async { Ok(Op::Put(new_value)) })
@@ -347,15 +342,15 @@ where
                 };
 
                 let op = match result {
-                    WBCompResult::Inserted(v) | WBCompResult::ReplacedWith(v) | WBCompResult::Unchanged(v) => {
+                    CompResult::Inserted(v) | CompResult::ReplacedWith(v) | CompResult::Unchanged(v) => {
                         primary_value = Some(v.into_value());
                         Op::Put(ValueState::Secondary(primary_key.unwrap()))
                     }
-                    WBCompResult::Removed(e) => {
+                    CompResult::Removed(e) => {
                         primary_value = Some(e.into_value());
                         Op::Remove
                     }
-                    WBCompResult::StillNone(_) => Op::Nop,
+                    CompResult::StillNone(_) => Op::Nop,
                 };
 
                 Result::<Op<ValueState<DC::Key, DC::Value>>, Arc<DC::Error>>::Ok(op)
@@ -363,15 +358,15 @@ where
             .await?;
 
         Ok(match result {
-            CompResult::Inserted(_) => WBCompResult::Inserted(WBEntry::new(self, key.clone(), primary_value.unwrap())),
-            CompResult::ReplacedWith(_) => {
-                WBCompResult::ReplacedWith(WBEntry::new(self, key.clone(), primary_value.unwrap()))
+            MokaCompResult::Inserted(_) => CompResult::Inserted(Entry::new(self, key.clone(), primary_value.unwrap())),
+            MokaCompResult::ReplacedWith(_) => {
+                CompResult::ReplacedWith(Entry::new(self, key.clone(), primary_value.unwrap()))
             }
-            CompResult::Unchanged(_) => {
-                WBCompResult::Unchanged(WBEntry::new(self, key.clone(), primary_value.unwrap()))
+            MokaCompResult::Unchanged(_) => {
+                CompResult::Unchanged(Entry::new(self, key.clone(), primary_value.unwrap()))
             }
-            CompResult::Removed(_) => WBCompResult::Removed(WBEntry::new(self, key.clone(), primary_value.unwrap())),
-            CompResult::StillNone(k) => WBCompResult::StillNone(k),
+            MokaCompResult::Removed(_) => CompResult::Removed(Entry::new(self, key.clone(), primary_value.unwrap())),
+            MokaCompResult::StillNone(k) => CompResult::StillNone(k),
         })
     }
 
@@ -380,7 +375,7 @@ where
         &self,
         key: &DC::Key,
         init: impl Future<Output = Result<DC::Value, DC::Error>>,
-    ) -> Result<WBEntry<DC>, Arc<DC::Error>> {
+    ) -> Result<Entry<DC>, Arc<DC::Error>> {
         debug!("get_or_try_insert_with_primary(key: {key:?})");
 
         self.maybe_flush_one(key).await?;
@@ -400,7 +395,7 @@ where
                 ))
             })
             .await?;
-        Ok(WBEntry::new(self, key.clone(), cache_entry.into_value().into_value()))
+        Ok(Entry::new(self, key.clone(), cache_entry.into_value().into_value()))
     }
 
     #[instrument(level = "trace", skip(self, init))]
@@ -408,7 +403,7 @@ where
         &self,
         key: &DC::Key,
         init: impl Future<Output = Result<DC::Value, DC::Error>>,
-    ) -> Result<WBEntry<DC>, Arc<DC::Error>> {
+    ) -> Result<Entry<DC>, Arc<DC::Error>> {
         let myself = self.myself().unwrap();
         let result = self
             .cache()
@@ -435,8 +430,8 @@ where
             .await?;
 
         Ok(match result {
-            CompResult::Inserted(e) | CompResult::Unchanged(e) | CompResult::ReplacedWith(e) => {
-                WBEntry::new(self, key.clone(), e.into_value().into_value())
+            MokaCompResult::Inserted(e) | MokaCompResult::Unchanged(e) | MokaCompResult::ReplacedWith(e) => {
+                Entry::new(self, key.clone(), e.into_value().into_value())
             }
             _ => panic!("Unexpected outcome of get_or_try_insert_with_secondary: {result:?}"),
         })
@@ -453,8 +448,8 @@ where
         f: F,
     ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error>
     where
-        F: FnOnce(&'a DC::Key, Option<Arc<DC::Value>>, Arc<WBUpdateState<DC>>) -> Fut,
-        Fut: Future<Output = Result<WBDataControllerOp, DC::Error>>,
+        F: FnOnce(&'a DC::Key, Option<Arc<DC::Value>>, Arc<UpdateState<DC>>) -> Fut,
+        Fut: Future<Output = Result<DataControllerOp, DC::Error>>,
     {
         let update_state;
         self.check_task().await;
@@ -473,7 +468,7 @@ where
                 .unwrap_or(key.clone());
 
             if !updates.contains_key(&update_key) {
-                update_state = child_build!(self, WBUpdateState<DC>).unwrap();
+                update_state = child_build!(self, UpdateState<DC>).unwrap();
                 updates.insert(key.clone(), Arc::clone(&update_state));
             } else {
                 update_state = updates.get(&update_key).unwrap().clone();
@@ -498,12 +493,12 @@ where
     }
 
     #[instrument(level = "trace")]
-    pub async fn entry(&self, key: DC::Key) -> Result<WBEntryKeySelector<DC>, Arc<DC::Error>> {
+    pub async fn entry(&self, key: DC::Key) -> Result<EntryKeySelector<DC>, Arc<DC::Error>> {
         check_error!(self);
         Ok(if let Some(pkey) = self.get_primary_key_from(&key).await? {
             child_build!(
                 self,
-                WBEntryKeySelector<DC> {
+                EntryKeySelector<DC> {
                     is_primary: pkey == key,
                     key: key,
                     primary_key: pkey,
@@ -512,7 +507,7 @@ where
         } else {
             child_build!(
                 self,
-                WBEntryKeySelector<DC> {
+                EntryKeySelector<DC> {
                     is_primary: self.data_controller().is_primary(&key),
                     key: key,
                 }
@@ -531,12 +526,12 @@ where
             .await?;
 
         Ok(match outcome {
-            WBCompResult::Inserted(entry) | WBCompResult::Unchanged(entry) | WBCompResult::ReplacedWith(entry) => {
+            CompResult::Inserted(entry) | CompResult::Unchanged(entry) | CompResult::ReplacedWith(entry) => {
                 let value = entry.into_value();
                 self.on_access(key, Arc::new(value.clone())).await?;
                 Some(value)
             }
-            WBCompResult::StillNone(_) => None,
+            CompResult::StillNone(_) => None,
             _ => None,
         })
     }
@@ -555,11 +550,13 @@ where
             .await?;
 
         match res {
-            CompResult::Inserted(entry) | CompResult::ReplacedWith(entry) | CompResult::Unchanged(entry) => {
+            MokaCompResult::Inserted(entry)
+            | MokaCompResult::ReplacedWith(entry)
+            | MokaCompResult::Unchanged(entry) => {
                 let value = entry.into_value().into_value();
                 Ok(Some(value))
             }
-            CompResult::StillNone(_) => Ok(None),
+            MokaCompResult::StillNone(_) => Ok(None),
             _ => panic!("Impossible result of insert operation: {res:?}"),
         }
     }
@@ -575,8 +572,8 @@ where
             .await?;
 
         Ok(match result {
-            WBCompResult::Removed(entry) => Some(entry.into_value()),
-            WBCompResult::StillNone(_) => None,
+            CompResult::Removed(entry) => Some(entry.into_value()),
+            CompResult::StillNone(_) => None,
             _ => panic!("Impossible result of delete operation: {result:?}"),
         })
     }
@@ -602,7 +599,7 @@ where
     }
 
     // Remove succesfully written updates from the pool.
-    fn _purify_updates(&self, update_iter: Arc<WBUpdateIterator<DC>>) -> usize {
+    fn _purify_updates(&self, update_iter: Arc<UpdateIterator<DC>>) -> usize {
         // First of all, ensure minimal overhead on lock acquisition. The operation itself is not going to take too long
         // and must be deadlock-free as well.
         let mut updates = self.updates_mut();
@@ -628,11 +625,11 @@ where
 
     pub async fn flush_many_raw(&self, keys: Vec<DC::Key>) -> Result<usize, DC::Error> {
         let update_iter = child_build!(
-            self, WBUpdateIterator<DC> {
+            self, UpdateIterator<DC> {
                 keys: keys
             }
         )
-        .expect("Internal error: WBUpdateIterator builder failure");
+        .expect("Internal error: UpdateIterator builder failure");
 
         wbc_event!(self, on_flush(update_iter.clone())?);
 
@@ -694,11 +691,11 @@ where
                 debug!("flush single key: {key:?}");
 
                 let update_iter = child_build!(
-                    self, WBUpdateIterator<DC> {
+                    self, UpdateIterator<DC> {
                         key_guard: (key.clone(), guard),
                     }
                 )
-                .expect("Internal error: WBUpdateIterator builder failure");
+                .expect("Internal error: UpdateIterator builder failure");
 
                 self.data_controller().write_back(update_iter.clone()).await?;
                 return Ok(self._purify_updates(update_iter));
@@ -771,21 +768,21 @@ where
 
     async fn _on_dc_op(
         &self,
-        op: WBDataControllerOp,
+        op: DataControllerOp,
         key: &DC::Key,
         value: Option<Arc<DC::Value>>,
     ) -> Result<Op<ValueState<DC::Key, DC::Value>>, DC::Error> {
         Ok(match op {
-            WBDataControllerOp::Nop => Op::Nop,
-            WBDataControllerOp::Insert => {
+            DataControllerOp::Nop => Op::Nop,
+            DataControllerOp::Insert => {
                 if let Some(value) = value {
                     Op::Put(ValueState::Primary(value.as_ref().clone()))
                 } else {
                     Op::Nop
                 }
             }
-            WBDataControllerOp::Revoke => Op::Remove,
-            WBDataControllerOp::Drop => {
+            DataControllerOp::Revoke => Op::Remove,
+            DataControllerOp::Drop => {
                 self.updates_mut().remove(key);
                 Op::Remove
             }
@@ -874,12 +871,12 @@ where
     }
 }
 
-impl<DC> Debug for WBCache<DC>
+impl<DC> Debug for Cache<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WBCache")
+        f.debug_struct("Cache")
             .field("name", &self.name())
             .field("updates_count", &self.updates().len())
             .field("cache_entries", &self.cache().entry_count())
@@ -887,11 +884,11 @@ where
     }
 }
 
-impl<DC> WBCacheBuilder<DC>
+impl<DC> CacheBuilder<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
-    pub fn observer(mut self, observer: impl WBObserver<DC>) -> Self {
+    pub fn observer(mut self, observer: impl Observer<DC>) -> Self {
         if let Some(ref mut observers) = self.observers {
             observers.push(Box::new(observer));
             self

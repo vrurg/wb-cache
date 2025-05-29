@@ -1,43 +1,35 @@
-use crate::{entry::WBEntry, traits::WBDataController};
+use crate::{entry::Entry, traits::DataController};
 use std::{fmt::Debug, sync::Arc};
 
-pub enum WBCompResult<DC>
+pub enum CompResult<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
-    Inserted(WBEntry<DC>),
-    ReplacedWith(WBEntry<DC>),
-    Removed(WBEntry<DC>),
-    Unchanged(WBEntry<DC>),
+    Inserted(Entry<DC>),
+    ReplacedWith(Entry<DC>),
+    Removed(Entry<DC>),
+    Unchanged(Entry<DC>),
     StillNone(Arc<DC::Key>),
 }
 
-impl<DC> Debug for WBCompResult<DC>
+impl<DC> Debug for CompResult<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Inserted(e) => fmt.debug_tuple("WBCompResult::Inserted").field(e).finish(),
-            Self::Removed(e) => fmt.debug_tuple("WBCompResult::Removed").field(e).finish(),
-            Self::ReplacedWith(e) => fmt.debug_tuple("WBCompResult::ReplacedWith").field(e).finish(),
-            Self::Unchanged(e) => fmt.debug_tuple("WBCompResult::Unchanged").field(e).finish(),
-            Self::StillNone(k) => fmt.debug_tuple("WBCompResult::StillNone").field(k).finish(),
+            Self::Inserted(e) => fmt.debug_tuple("CompResult::Inserted").field(e).finish(),
+            Self::Removed(e) => fmt.debug_tuple("CompResult::Removed").field(e).finish(),
+            Self::ReplacedWith(e) => fmt.debug_tuple("CompResult::ReplacedWith").field(e).finish(),
+            Self::Unchanged(e) => fmt.debug_tuple("CompResult::Unchanged").field(e).finish(),
+            Self::StillNone(k) => fmt.debug_tuple("CompResult::StillNone").field(k).finish(),
         }
     }
 }
 
-pub enum WBPlan<DC>
-where
-    DC: WBDataController,
-{
-    Invalidate(DC::Key),
-    Nop(DC::Key),
-}
-
 /// What the cache controller should do with the initial value that was submitted for data controller processing.
 #[derive(Debug, Clone, Copy)]
-pub enum WBDataControllerOp {
+pub enum DataControllerOp {
     /// Do nothing, only put the returned update record into the update pool.
     Nop,
     /// Insert the value into the cache. This is possible for "immutable" records, i.e., those for which it can be
@@ -58,20 +50,20 @@ pub enum WBDataControllerOp {
     Drop,
 }
 
-pub struct WBDataControllerResponse<DC>
+pub struct DataControllerResponse<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
-    pub op: WBDataControllerOp,
+    pub op: DataControllerOp,
     pub update: Option<DC::CacheUpdate>,
 }
 
-impl<DC> Debug for WBDataControllerResponse<DC>
+impl<DC> Debug for DataControllerResponse<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_struct("WBDataControllerResponse")
+        fmt.debug_struct("DataControllerResponse")
             .field("op", &self.op)
             .field("update", &self.update)
             .finish()

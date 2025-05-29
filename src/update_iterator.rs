@@ -1,43 +1,43 @@
 use fieldx_plus::{child_build, fx_plus};
 use tokio::sync::OwnedRwLockWriteGuard;
 
-use crate::{WBCache, WBDataController};
+use crate::{Cache, DataController};
 
-type WBKeyGuard<DC> = (
-    <DC as WBDataController>::Key,
-    OwnedRwLockWriteGuard<Option<<DC as WBDataController>::CacheUpdate>>,
+type KeyGuard<DC> = (
+    <DC as DataController>::Key,
+    OwnedRwLockWriteGuard<Option<<DC as DataController>::CacheUpdate>>,
 );
-type WBKeyOptGuard<DC> = (
-    <DC as WBDataController>::Key,
-    Option<OwnedRwLockWriteGuard<Option<<DC as WBDataController>::CacheUpdate>>>,
+type KeyOptGuard<DC> = (
+    <DC as DataController>::Key,
+    Option<OwnedRwLockWriteGuard<Option<<DC as DataController>::CacheUpdate>>>,
 );
 
 #[fx_plus(
-    child(WBCache<DC>, rc_strong),
+    child(Cache<DC>, rc_strong),
     parent,
     default(off),
     sync,
     rc,
     get(off)
 )]
-pub struct WBUpdateIterator<DC>
+pub struct UpdateIterator<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
     #[fieldx(inner_mut, private, get, get_mut, builder(private))]
-    unprocessed: Vec<WBKeyOptGuard<DC>>,
+    unprocessed: Vec<KeyOptGuard<DC>>,
 
     #[fieldx(inner_mut, private, get(copy), set, builder(off))]
     next_idx: usize,
 
     // Collect owned guards here. When the iterator is dropped the locks are released.
     #[fieldx(inner_mut, get_mut(vis(pub(crate))), builder(off))]
-    worked: Vec<WBKeyGuard<DC>>,
+    worked: Vec<KeyGuard<DC>>,
 }
 
-impl<DC> WBUpdateIterator<DC>
+impl<DC> UpdateIterator<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
     #[inline(always)]
     fn take_back(&self, key_guard: (DC::Key, OwnedRwLockWriteGuard<Option<DC::CacheUpdate>>)) {
@@ -61,7 +61,7 @@ where
         self.unprocessed().len()
     }
 
-    pub fn next(&self) -> Option<WBUpdateIteratorItem<DC>> {
+    pub fn next(&self) -> Option<UpdateIteratorItem<DC>> {
         let mut unprocessed = self.unprocessed_mut();
         loop {
             let next_idx = self.next_idx();
@@ -71,7 +71,7 @@ where
 
             let Some((key, guard)) = unprocessed.get_mut(next_idx).map(|(k, g)| (k.clone(), g.take())) else {
                 panic!(
-                    "Internal error of WBUpdateIterator<{}>: next update key not found at index {next_idx}",
+                    "Internal error of UpdateIterator<{}>: next update key not found at index {next_idx}",
                     std::any::type_name::<DC>()
                 );
             };
@@ -99,7 +99,7 @@ where
             if guard.is_some() {
                 return Some(
                     child_build!(
-                        self, WBUpdateIteratorItem<DC> {
+                        self, UpdateIteratorItem<DC> {
                             key_guard: Some((key.clone(), guard)),
                         }
                     )
@@ -115,9 +115,9 @@ where
     }
 }
 
-impl<DC> WBUpdateIteratorBuilder<DC>
+impl<DC> UpdateIteratorBuilder<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
     /// Setup the iterator from a list of keys. In this case it will attemp to collect the write locks from the update
     /// records.
@@ -134,21 +134,21 @@ where
 }
 
 #[fx_plus(
-    child(WBUpdateIterator<DC>, rc_strong),
+    child(UpdateIterator<DC>, rc_strong),
     default(off),
     sync,
 )]
-pub struct WBUpdateIteratorItem<DC>
+pub struct UpdateIteratorItem<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
     // Option here is to allow the Drop trait to take the guard back to the iterator.
-    key_guard: Option<WBKeyGuard<DC>>,
+    key_guard: Option<KeyGuard<DC>>,
 }
 
-impl<DC> WBUpdateIteratorItem<DC>
+impl<DC> UpdateIteratorItem<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
     pub fn update(&self) -> &DC::CacheUpdate {
         // The .expect must never fire because we own the exclusive lock and the iterator is checking for None before
@@ -176,9 +176,9 @@ where
     }
 }
 
-impl<DC> Drop for WBUpdateIteratorItem<DC>
+impl<DC> Drop for UpdateIteratorItem<DC>
 where
-    DC: WBDataController + Send + Sync + 'static,
+    DC: DataController + Send + Sync + 'static,
 {
     fn drop(&mut self) {
         if let Some(key_guard) = self.key_guard.take() {

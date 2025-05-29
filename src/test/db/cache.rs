@@ -2,8 +2,8 @@ use crate::prelude::*;
 use crate::test::types::simerr;
 use crate::test::types::Result;
 use crate::test::types::SimErrorAny;
-use crate::update_iterator::WBUpdateIterator;
-use crate::update_iterator::WBUpdateIteratorItem;
+use crate::update_iterator::UpdateIterator;
+use crate::update_iterator::UpdateIteratorItem;
 use crate::wbdc_response;
 use sea_orm::entity::Iterable;
 use sea_orm::ActiveModelTrait;
@@ -20,7 +20,7 @@ use tracing::instrument;
 
 use super::driver::DatabaseDriver;
 
-// Every model would implement WBCacheUpdate trait for this enum.
+// Every model would implement CacheUpdate trait for this enum.
 #[derive(Debug)]
 pub enum CacheUpdates<AM>
 where
@@ -51,13 +51,13 @@ pub trait DBProvider: Sync + Send + 'static {
     fn db_connection(&self) -> Result<DatabaseConnection>;
 }
 
-// Common implementation of WBDataController methods.
+// Common implementation of DataController methods.
 // Preconditions:
 // - The db::CacheUpdates enum is used to track updates.
 // - It is possible to delete database rows in batches based on a list of keys.
 #[async_trait]
-pub trait WBDCCommon<T, PARENT, const IMMUTABLE: bool = false>:
-    WBDataController<CacheUpdate = CacheUpdates<T::ActiveModel>, Error = SimErrorAny> + Send + Debug
+pub trait DCCommon<T, PARENT, const IMMUTABLE: bool = false>:
+    DataController<CacheUpdate = CacheUpdates<T::ActiveModel>, Error = SimErrorAny> + Send + Debug
 where
     T: EntityTrait + Send + Sync + 'static,
     T::Model: IntoActiveModel<T::ActiveModel>,
@@ -79,7 +79,7 @@ where
     }
 
     #[instrument(level = "trace", skip(update_records))]
-    async fn wbdc_write_back(&self, update_records: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error> {
+    async fn wbdc_write_back(&self, update_records: Arc<UpdateIterator<Self>>) -> Result<(), Self::Error> {
         let conn_provider = self.db_provider()?;
         let db_conn = conn_provider.db_connection()?;
 
@@ -94,7 +94,7 @@ where
             if (last_loop && !inserts.is_empty()) || inserts.len() >= 1000 {
                 let am_list = inserts
                     .iter()
-                    .map(|i: &WBUpdateIteratorItem<Self>| {
+                    .map(|i: &UpdateIteratorItem<Self>| {
                         let CacheUpdates::<T::ActiveModel>::Insert(am) = i.update() else {
                             unreachable!("Expected insert update, but got: {:?}", i.update())
                         };
@@ -110,7 +110,7 @@ where
             if (last_loop && !deletes.is_empty()) || deletes.len() >= 1000 {
                 let delete_chunk = deletes
                     .iter()
-                    .map(|i: &WBUpdateIteratorItem<Self>| {
+                    .map(|i: &UpdateIteratorItem<Self>| {
                         let CacheUpdates::<T::ActiveModel>::Delete = i.update() else {
                             unreachable!("Expected delete update, but got: {:?}", i.update())
                         };
@@ -153,19 +153,15 @@ where
     }
 
     #[instrument(level = "trace", skip(value))]
-    async fn wbdbc_on_new<AM>(
-        &self,
-        _key: &Self::Key,
-        value: &AM,
-    ) -> Result<WBDataControllerResponse<Self>, Self::Error>
+    async fn wbdbc_on_new<AM>(&self, _key: &Self::Key, value: &AM) -> Result<DataControllerResponse<Self>, Self::Error>
     where
         AM: Into<T::ActiveModel> + Clone + Send + Sync + 'static,
     {
         // Ok(Some(CacheUpdates::Insert(value.clone().into())))
         let op = if IMMUTABLE {
-            WBDataControllerOp::Insert
+            DataControllerOp::Insert
         } else {
-            WBDataControllerOp::Nop
+            DataControllerOp::Nop
         };
         Ok(wbdc_response!(op, Some(CacheUpdates::Insert(value.clone().into()))))
     }
@@ -175,15 +171,15 @@ where
         &self,
         _key: &Self::Key,
         update: Option<&CacheUpdates<T::ActiveModel>>,
-    ) -> Result<WBDataControllerResponse<Self>, Self::Error> {
+    ) -> Result<DataControllerResponse<Self>, Self::Error> {
         let op = if IMMUTABLE && update.is_some() && matches!(update.unwrap(), CacheUpdates::Insert(_)) {
             // The perfect case where an insert update hasn't been written to the backend yet and can be just dropped
             // altogether.
-            WBDataControllerOp::Drop
+            DataControllerOp::Drop
         } else {
             // In other cases we only request for cache removal and expect the next flush to remove the data from the
             // backend.
-            WBDataControllerOp::Revoke
+            DataControllerOp::Revoke
         };
         Ok(wbdc_response!(op, Some(CacheUpdates::Delete)))
     }
@@ -195,7 +191,7 @@ where
         value: &Self::Value,
         old_value: Self::Value,
         prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<WBDataControllerResponse<Self>, Self::Error> {
+    ) -> Result<DataControllerResponse<Self>, Self::Error> {
         // We use the previous update state as the base when it exists. Otherwise the previous cached value would
         // implement this role.
         let mut prev_am: T::ActiveModel = if let Some(ref prev) = prev_update {
@@ -225,9 +221,9 @@ where
 
         Ok(if changed {
             let op = if IMMUTABLE {
-                WBDataControllerOp::Insert
+                DataControllerOp::Insert
             } else {
-                WBDataControllerOp::Nop
+                DataControllerOp::Nop
             };
 
             wbdc_response!(
@@ -239,7 +235,7 @@ where
                 })
             )
         } else {
-            wbdc_response!(WBDataControllerOp::Nop, prev_update)
+            wbdc_response!(DataControllerOp::Nop, prev_update)
         })
     }
 }

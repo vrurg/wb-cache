@@ -4,16 +4,16 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::types::WBDataControllerOp;
-use crate::types::WBDataControllerResponse;
-use crate::update_iterator::WBUpdateIterator;
+use crate::types::DataControllerOp;
+use crate::types::DataControllerResponse;
+use crate::update_iterator::UpdateIterator;
 use crate::wbdc_response;
 
 // For types that are in charge of reading/writing records.
 #[async_trait]
-pub trait WBDataController: Sized + Send + Sync + 'static {
-    /// The key type to be used with methods like [`WBCache::get()`](crate::WBCache::get) or
-    /// [`WBCache::entry()`](crate::WBCache::entry).
+pub trait DataController: Sized + Send + Sync + 'static {
+    /// The key type to be used with methods like [`Cache::get()`](crate::Cache::get) or
+    /// [`Cache::entry()`](crate::Cache::entry).
     ///
     /// To implement multi-key access you can use an enum as the key type.
     type Key: Debug + Display + Hash + Clone + Eq + Sized + Send + Sync + 'static;
@@ -23,21 +23,20 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
 
     async fn get_for_key(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error>;
     // In the future the method might return a list of instructions for the cache on how to act upon modified keys.
-    async fn write_back(&self, updates: Arc<WBUpdateIterator<Self>>) -> Result<(), Self::Error>;
-    async fn on_new(&self, key: &Self::Key, value: &Self::Value)
-        -> Result<WBDataControllerResponse<Self>, Self::Error>;
+    async fn write_back(&self, updates: Arc<UpdateIterator<Self>>) -> Result<(), Self::Error>;
+    async fn on_new(&self, key: &Self::Key, value: &Self::Value) -> Result<DataControllerResponse<Self>, Self::Error>;
     async fn on_delete(
         &self,
         key: &Self::Key,
         update: Option<&Self::CacheUpdate>,
-    ) -> Result<WBDataControllerResponse<Self>, Self::Error>;
+    ) -> Result<DataControllerResponse<Self>, Self::Error>;
     async fn on_change(
         &self,
         key: &Self::Key,
         value: &Self::Value,
         old_value: Self::Value,
         prev_handler: Option<Self::CacheUpdate>,
-    ) -> Result<WBDataControllerResponse<Self>, Self::Error>;
+    ) -> Result<DataControllerResponse<Self>, Self::Error>;
     fn primary_key_of(&self, value: &Self::Value) -> Self::Key;
 
     /// Returns a list of secondary keys for the given value.
@@ -63,18 +62,18 @@ pub trait WBDataController: Sized + Send + Sync + 'static {
         _key: &Self::Key,
         _value: &Self::Value,
         prev_update: Option<Self::CacheUpdate>,
-    ) -> Result<WBDataControllerResponse<Self>, Self::Error> {
+    ) -> Result<DataControllerResponse<Self>, Self::Error> {
         // log::debug!("default DC on_access for '{_key}'");
-        Ok(wbdc_response!(WBDataControllerOp::Nop, prev_update))
+        Ok(wbdc_response!(DataControllerOp::Nop, prev_update))
     }
 }
 
 #[async_trait]
-pub trait WBObserver<DC>: Send + Sync + 'static
+pub trait Observer<DC>: Send + Sync + 'static
 where
-    DC: WBDataController,
+    DC: DataController,
 {
-    async fn on_flush(&self, _cache_updates: Arc<WBUpdateIterator<DC>>) -> Result<(), DC::Error> {
+    async fn on_flush(&self, _cache_updates: Arc<UpdateIterator<DC>>) -> Result<(), DC::Error> {
         Ok(())
     }
     async fn on_flush_one(&self, _updates: &DC::Key, _update: &DC::CacheUpdate) -> Result<(), Arc<DC::Error>> {

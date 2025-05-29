@@ -7,10 +7,10 @@ use std::future::Future;
 use std::sync::Arc;
 use tracing::instrument;
 
-#[fx_plus(child(WBCache<DC>, rc_strong), default(off), sync)]
-pub struct WBEntryKeySelector<DC>
+#[fx_plus(child(Cache<DC>, rc_strong), default(off), sync)]
+pub struct EntryKeySelector<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     #[fieldx(predicate, get)]
     primary_key: DC::Key,
@@ -22,14 +22,14 @@ where
     is_primary: bool,
 }
 
-impl<DC> WBEntryKeySelector<DC>
+impl<DC> EntryKeySelector<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     #[instrument(level = "trace", skip(f))]
-    pub async fn and_try_compute_with<F, Fut>(self, f: F) -> Result<WBCompResult<DC>, Arc<DC::Error>>
+    pub async fn and_try_compute_with<F, Fut>(self, f: F) -> Result<CompResult<DC>, Arc<DC::Error>>
     where
-        F: FnOnce(Option<WBEntry<DC>>) -> Fut,
+        F: FnOnce(Option<Entry<DC>>) -> Fut,
         Fut: Future<Output = Result<Op<DC::Value>, DC::Error>>,
     {
         let parent = self.parent();
@@ -41,7 +41,7 @@ where
     }
 
     #[instrument(level = "trace", skip(init))]
-    pub async fn or_try_insert_with<F>(self, init: F) -> Result<WBEntry<DC>, Arc<DC::Error>>
+    pub async fn or_try_insert_with<F>(self, init: F) -> Result<Entry<DC>, Arc<DC::Error>>
     where
         F: Future<Output = Result<DC::Value, DC::Error>>,
     {
@@ -54,12 +54,12 @@ where
     }
 }
 
-impl<DC> Debug for WBEntryKeySelector<DC>
+impl<DC> Debug for EntryKeySelector<DC>
 where
-    DC: WBDataController,
+    DC: DataController,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WBEntryKeySelector")
+        f.debug_struct("EntryKeySelector")
             .field("primary_key", &self.primary_key)
             .field("key", &self.key)
             .field("is_primary", &self.is_primary)
