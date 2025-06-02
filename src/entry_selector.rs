@@ -18,24 +18,23 @@ where
     key: DC::Key,
 
     #[fieldx(get(copy))]
-    is_primary: bool,
+    primary: bool,
 }
 
 impl<DC> EntryKeySelector<DC>
 where
     DC: DataController,
 {
-    #[instrument(level = "trace", skip(f))]
-    pub async fn and_try_compute_with<F, Fut>(self, f: F) -> Result<CompResult<DC>, Arc<DC::Error>>
+    pub async fn and_try_compute_with<F, Fut>(self, callback: F) -> Result<CompResult<DC>, Arc<DC::Error>>
     where
         F: FnOnce(Option<Entry<DC>>) -> Fut,
         Fut: Future<Output = Result<Op<DC::Value>, DC::Error>>,
     {
         let parent = self.parent();
-        Ok(if self.is_primary {
-            parent.get_and_try_compute_with_primary(self.key(), f).await?
+        Ok(if self.primary {
+            parent.get_and_try_compute_with_primary(self.key(), callback).await?
         } else {
-            parent.get_and_try_compute_with_secondary(self.key(), f).await?
+            parent.get_and_try_compute_with_secondary(self.key(), callback).await?
         })
     }
 
@@ -45,7 +44,7 @@ where
         F: Future<Output = Result<DC::Value, DC::Error>>,
     {
         let parent = self.parent();
-        if self.is_primary {
+        if self.primary {
             parent.get_or_try_insert_with_primary(self.key(), init).await
         } else {
             parent.get_or_try_insert_with_secondary(self.key(), init).await
@@ -61,7 +60,7 @@ where
         f.debug_struct("EntryKeySelector")
             .field("primary_key", &self.primary_key)
             .field("key", &self.key)
-            .field("is_primary", &self.is_primary)
+            .field("is_primary", &self.primary)
             .finish()
     }
 }
