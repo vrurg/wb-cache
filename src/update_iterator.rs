@@ -18,7 +18,8 @@ type KeyOptGuard<DC> = (
     default(off),
     sync,
     rc,
-    get(off)
+    get(off),
+    builder(vis(pub(crate)))
 )]
 pub struct UpdateIterator<DC>
 where
