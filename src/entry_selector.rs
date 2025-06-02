@@ -7,7 +7,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tracing::instrument;
 
-#[fx_plus(child(Cache<DC>, rc_strong), default(off), sync)]
+#[fx_plus(child(Cache<DC>, rc_strong), default(off), sync, builder(vis(pub(crate))))]
 pub struct EntryKeySelector<DC>
 where
     DC: DataController,
