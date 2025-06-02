@@ -8,6 +8,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::instrument;
 
+/// This is a snapshot of a single entry in the cache. Note that as a snapshot, it doesn't refer to the value in the
+/// cache, but holds a copy of it.
 #[fx_plus(child(Cache<DC>, rc_strong), sync, default(off))]
 pub struct Entry<DC>
 where
@@ -48,16 +50,19 @@ where
         .unwrap()
     }
 
+    /// The snapshot value.
     #[instrument(level = "trace")]
     pub async fn value(&self) -> Result<&DC::Value, Arc<DC::Error>> {
         self.parent().on_access(&self.key, Arc::new(self.value.clone())).await?;
         Ok(&self.value)
     }
 
+    /// The key of the entry.
     pub fn key(&self) -> &DC::Key {
         &self.key
     }
 
+    /// Consumes the entry and returns its stored value.
     pub fn into_value(self) -> DC::Value {
         self.value
     }

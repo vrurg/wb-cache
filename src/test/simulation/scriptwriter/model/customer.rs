@@ -66,8 +66,7 @@ impl CustomerModel {
         );
     }
 
-    /// Richards growth function
-    /// https://en.wikipedia.org/wiki/Generalised_logistic_function
+    /// [Richards growth function](https://en.wikipedia.org/wiki/Generalised_logistic_function)
     pub fn expected_customers(&self, t: i32) -> f64 {
         let t = t as f64;
         self.market_capacity / (1.0 + self.q() * (-self.growth_rate() * t).exp()).powf(1.0 / self.v)

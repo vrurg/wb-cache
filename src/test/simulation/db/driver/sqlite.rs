@@ -1,3 +1,4 @@
+//! SQLite database driver.
 use std::borrow::Borrow;
 use std::ops::Deref;
 use std::path::Path;
@@ -14,6 +15,7 @@ use crate::test::simulation::types::Result;
 
 use super::DatabaseDriver;
 
+/// SQLite database driver.
 #[derive(Debug)]
 #[fxstruct(sync, no_new)]
 pub struct Sqlite {
@@ -39,6 +41,11 @@ impl DatabaseDriver for Sqlite {
         self.connection.clone()
     }
 
+    /// Set the following SQLite pragmas for performance:
+    ///
+    /// - `journal_mode=WAL`
+    /// - `cache=64000`
+    /// - `synchronous=NORMAL`
     async fn configure(&self) -> Result<()> {
         let db = &self.connection;
 
@@ -49,6 +56,7 @@ impl DatabaseDriver for Sqlite {
         Ok(())
     }
 
+    /// Execute `wal_checkpoint` to checkpoint the WAL (Write-Ahead Logging) journal.
     async fn checkpoint(&self) -> Result<()> {
         self.connection.execute_unprepared("PRAGMA wal_checkpoint;").await?;
 

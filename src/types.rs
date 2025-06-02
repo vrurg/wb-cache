@@ -1,14 +1,23 @@
 use crate::{entry::Entry, traits::DataController};
 use std::{fmt::Debug, sync::Arc};
 
+/// The result of a compute operation on an entry. Results that affect the cache content are reflected in the
+/// controller's update pool.
+///
+/// Variants that contain an [`Entry`] are returned with the final entry value.
 pub enum CompResult<DC>
 where
     DC: DataController,
 {
+    /// The entry has been inserted into the cache.
     Inserted(Entry<DC>),
+    /// The entry has been replaced with a new one.
     ReplacedWith(Entry<DC>),
+    /// The entry has been removed from the cache.
     Removed(Entry<DC>),
+    /// The entry is in the cache and remains unchanged.
     Unchanged(Entry<DC>),
+    /// There is still no entry for the key.
     StillNone(Arc<DC::Key>),
 }
 
@@ -43,6 +52,14 @@ pub enum DataControllerOp {
     Insert,
     /// Revoke the value from the cache. Useful for cases when the data controller knows that the value must undergo a
     /// flushing operation either to be deleted from the backend or to be updated.
+    ///
+    /// _Note:_ There is a nuance in how the cache controller decides to flush an individual record when necessary: if
+    /// there is an update record for its key but the data record itself is not cached, then it is time to flush that
+    /// key under certain circumstances. Such circumstances may include, for example, a request to update the data
+    /// record.  Since the cache controller does not know how to apply the update (and the data controller may also be
+    /// uncertain about this), the only way to provide the user with a valid data record is to flush the update first.
+    ///
+    /// ![](https://raw.githubusercontent.com/vrurg/wb-cache/d203ef0eec0060d4fd5eca34bb6646bd24f642d3/docs/flush_individual.svg)
     Revoke,
     /// An extreme case of the `Revoke` operation. The value is not only revoked from the cache, but the corresponding entry
     /// is also removed from the update pool. This would be an ideal case of an "immutable" record which is inserted and deleted
@@ -50,11 +67,17 @@ pub enum DataControllerOp {
     Drop,
 }
 
+/// The response that the cache controller receives from the data controller after processing a new/change/delete/access
+/// request.
 pub struct DataControllerResponse<DC>
 where
     DC: DataController,
 {
+    /// The operation that the data controller suggests to perform with the value associated with the processed request.
     pub op: DataControllerOp,
+    /// The update record produced by the data controller. If it is not `None` then the cache controller must put it
+    /// into the update pool and will later pass it into the
+    /// [`DataController::write_back()`](crate::traits::DataController::write_back) method.
     pub update: Option<DC::CacheUpdate>,
 }
 

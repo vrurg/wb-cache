@@ -5,16 +5,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-// TODO! The data controller should be able to report back the status of the processed update. Currently, the
-// anticipated statuses are:
-//
-// - 'final' where the controller returns DC::CacheUpdate and the final DC::Value which can be sent back to the cache
-// - 'pending' which is the current behavior where the cache is not updated and only the .update field is refreshed
-//
-// The update object must be marked accordingly to the outcome of calling the data controller method. Later on,
-// maybe_flush would check the status of the update and decide whether to flush it or not. Eventually, this would allow
-// prevent any writes to the backend in cases where the final operation on the value is `delete`.
-
 // This struct is here to contain a key updating procedures withing single thread or task and to prevent the entire
 // cache object to block on `updates` HashMap locks. The point is that it may take a while for a data controller to
 // process on_new, on_access and, perhaps, other requests and get back with a response. This 'while' is the time other

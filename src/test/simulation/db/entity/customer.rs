@@ -35,7 +35,7 @@ pub struct Model {
     pub first_name: String,
     #[serde(rename = "l")]
     pub last_name: String,
-    // The day number when the user was registered.
+    /// The simulation day number when the user was registered.
     #[serde(rename = "d")]
     pub registered_on: i32,
 }
@@ -45,9 +45,12 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
+/// The cache key type for customer records.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CustomerBy {
+    /// The primary key
     Id(i32),
+    /// The secondary key
     Email(String),
 }
 
@@ -60,6 +63,7 @@ impl Display for CustomerBy {
     }
 }
 
+/// The manager and data controller for customer records in the database.
 #[fx_plus(
     child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("customer manager")))),
     sync,
@@ -73,12 +77,14 @@ impl<DBCP> Manager<DBCP>
 where
     DBCP: DBProvider,
 {
+    /// Fetch customer record from the database by its ID key.
     pub async fn get_by_id(&self, id: i32) -> Result<Option<Model>> {
         let parent = self.parent()?;
         let db = parent.db_connection()?;
         Ok(Entity::find_by_id(id).one(&db).await?)
     }
 
+    /// Fetch customer record from the database by its email key.
     pub async fn get_by_email(&self, email: &str) -> Result<Option<Model>> {
         let parent = self.parent()?;
         let db = parent.db_connection()?;
@@ -135,6 +141,7 @@ where
         vec![CustomerBy::Email(value.email.clone())]
     }
 
+    /// Returns true if the key variant is [`CustomerBy::Id`].
     fn is_primary(&self, key: &Self::Key) -> bool {
         matches!(key, CustomerBy::Id(_))
     }
@@ -171,6 +178,8 @@ impl<DBCP> DCCommon<Entity, DBCP> for Manager<DBCP>
 where
     DBCP: DBProvider,
 {
+    /// Provide correct condition for SeaORM's [`DeleteMany`] operation.
+    /// A customer entry can be deleted by either its ID or email, so we build a condition that checks both.
     fn delete_many_condition(dm: DeleteMany<Entity>, keys: Vec<Self::Key>) -> DeleteMany<Entity> {
         let mut by_id = vec![];
         let mut by_email = vec![];

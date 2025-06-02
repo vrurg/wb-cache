@@ -24,8 +24,10 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "p")]
     pub product_id: i32,
+    /// The current number of items in stock.
     #[serde(rename = "s")]
     pub stock: i64,
+    /// How many days does it take to fulfill an order for this product.
     #[serde(rename = "h")]
     pub handling_days: i16,
 }
@@ -42,6 +44,7 @@ pub enum Relation {
 
 impl ActiveModelBehavior for ActiveModel {}
 
+/// The manager and data controller for inventory model.
 #[fx_plus(
     child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("inventory record manager")))),
     sync,
@@ -55,6 +58,7 @@ impl<DBCP> Manager<DBCP>
 where
     DBCP: DBProvider,
 {
+    /// Get inventory record for the give product.
     pub async fn get_by_product_id(&self, product_id: i32) -> Result<Option<Model>> {
         Ok(Entity::find_by_id(product_id)
             .one(&self.db_provider()?.db_connection()?)

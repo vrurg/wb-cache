@@ -11,12 +11,15 @@ pub struct EntryKeySelector<DC>
 where
     DC: DataController,
 {
+    /// Contains the primary key for existing entries.
     #[fieldx(optional, get)]
     primary_key: DC::Key,
 
+    /// The key for which this selector is created.
     #[fieldx(get)]
     key: DC::Key,
 
+    /// True if this is a primary key selector, false if it is a secondary key selector.
     #[fieldx(get(copy))]
     primary: bool,
 }
@@ -25,6 +28,15 @@ impl<DC> EntryKeySelector<DC>
 where
     DC: DataController,
 {
+    /// Performs a compute operation on the entry identified by the key. If the entry is not cached yet the controller
+    /// will try to pull it from the backend via its data controller. If the entry is not found, the callback will be
+    /// called with `None`.
+    ///
+    /// The callback should return a `Result<Op<DC::Value>, DC::Error>`, where [`Op`] will instruct the controller how
+    /// to use the returned value.
+    ///
+    /// Returns a [result](`CompResult`) of the operation if it succeeds or an error.
+    #[instrument(level = "trace", skip(callback))]
     pub async fn and_try_compute_with<F, Fut>(self, callback: F) -> Result<CompResult<DC>, Arc<DC::Error>>
     where
         F: FnOnce(Option<Entry<DC>>) -> Fut,
@@ -38,6 +50,8 @@ where
         })
     }
 
+    /// Returns an [`Entry`] for the requested key if it's either cached or can be fetched from the backend. Otherwise
+    /// uses the give `init` future to create a new entry.
     #[instrument(level = "trace", skip(init))]
     pub async fn or_try_insert_with<F>(self, init: F) -> Result<Entry<DC>, Arc<DC::Error>>
     where

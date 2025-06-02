@@ -1,8 +1,3 @@
-// - PostgreSQL
-// [INFO]       plain |      cached
-// [INFO]   25941.91s |     294.50s
-// [INFO]      88.09x |       1.00x
-
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Display;

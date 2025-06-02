@@ -1,4 +1,9 @@
-#![cfg(any(test, feature = "simulation"))]
+//! Models used in the simulation test suite.
+//!
+//! # Implementation note.
+//!
+//! For each model in this module, there is a corresponding `Manager` type that provides basic convenience methods
+//! and implements the [`crate::traits::DataController`] trait.
 pub mod customer;
 pub mod inventory_record;
 pub mod order;

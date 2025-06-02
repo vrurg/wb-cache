@@ -29,11 +29,13 @@ pub struct Model {
     pub customer_id: i32,
     #[serde(rename = "p")]
     pub product_id: i32,
+    // Order size in items.
     #[serde(rename = "q")]
     pub quantity: i32,
+    /// The current status of the order.
     #[serde(rename = "s")]
     pub status: OrderStatus,
-    // The day number when the order was purchased.
+    /// The day number when the order was placed.
     #[serde(rename = "d")]
     pub purchased_on: i32,
 }
@@ -61,6 +63,8 @@ impl ActiveModelBehavior for ActiveModel {}
     sync,
     rc
 )]
+
+/// The manager and data controller for the order model.
 pub struct Manager<DBCP>
 where
     DBCP: DBProvider, {}
@@ -69,6 +73,7 @@ impl<DBCP> Manager<DBCP>
 where
     DBCP: DBProvider,
 {
+    /// Get the order for the given ID.
     pub async fn get_by_order_id(&self, order_id: Uuid) -> Result<Vec<Model>, SimErrorAny> {
         Ok(Entity::find()
             .filter(Column::Id.eq(order_id))

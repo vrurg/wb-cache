@@ -1,3 +1,4 @@
+//! PostgreSQL database driver.
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,6 +11,7 @@ use crate::test::simulation::types::Result;
 
 use super::DatabaseDriver;
 
+/// PostgreSQL database driver.
 #[derive(Debug)]
 #[fxstruct(sync, rc, no_new, builder)]
 pub struct Pg {
@@ -51,6 +53,7 @@ impl DatabaseDriver for Pg {
         self.connection.read().clone()
     }
 
+    /// Turn off synchronous commit for performance.
     async fn configure(&self) -> Result<()> {
         self.connection()
             .execute_unprepared("SET synchronous_commit = off;")

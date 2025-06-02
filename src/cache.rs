@@ -118,24 +118,42 @@ where
     DC::Key: Send + Sync + 'static,
     DC::Error: Send + Sync + 'static,
 {
-    #[fieldx(lock, clearer, get(clone), set, builder(off))]
+    /// The last error that occurred within the background task.  If set, any subsequent call to a public method
+    /// operating on the cache object will return this error.
+    #[fieldx(
+        lock,
+        clearer(doc("Clears and returns the last error or `None`.")),
+        get(clone),
+        set(private),
+        builder(off)
+    )]
     error: Arc<DC::Error>,
 
-    #[fieldx(vis(pub(crate)), builder(vis(pub), required, into), get(clone))]
+    /// The data controller object.
+    #[fieldx(vis(pub), builder(vis(pub), required, into), get(clone))]
     data_controller: Arc<DC>,
 
-    /// Cache name. Most useful for debugging and logging.
-    #[fieldx(lock, optional, clearer, get(off))]
+    // This is a transitive attribute that we use to get a name from the builder and then bypass it into the cache
+    // object builder.
+    #[fieldx(lock, private, optional, clearer, get(off), builder(vis(pub), doc("Cache name.")))]
     name: &'static str,
 
+    /// The maximum size of the updates pool. This not a hard limit but a threshold that triggers automatic flushing
+    /// by the background task.
+    ///
+    /// Defaults to 100.
     #[fieldx(get(copy), default(100))]
     max_updates: u64,
 
+    /// The maximum cache capacity. This is a hard limit on the number of key entries (not records).
+    /// See the crate documentation for details.
+    ///
+    /// Defaults to 10000.
     #[fieldx(get(copy), default(10_000))]
     max_capacity: u64,
 
     /// The delay between two consecutive flushes. If a flush was manually requested then the timer is reset.
-    #[fieldx(get(copy), set, default(Duration::from_secs(10)))]
+    #[fieldx(get(copy), set(doc("Change the flush interval.")), default(Duration::from_secs(10)))]
     flush_interval: Duration,
 
     #[fieldx(vis(pub(crate)), set(private), builder(off))]
@@ -148,6 +166,7 @@ where
     #[fieldx(private, clearer, writer, builder(off))]
     monitor_task: JoinHandle<()>,
 
+    /// The period of time between two consecutive checks of the cache state by the background task.
     #[fieldx(get(copy), default(10))]
     monitor_tick_duration: u64,
 
@@ -486,12 +505,14 @@ where
         self._on_dc_op(op, key, value).await
     }
 
+    /// Cache name. Most useful for debugging and logging.
     #[allow(dead_code)]
     #[inline]
     pub fn name(&self) -> String {
         self.cache().name().unwrap_or("<anon>").to_string()
     }
 
+    /// Returns an object that represents a key in the cache.
     #[instrument(level = "trace")]
     pub async fn entry(&self, key: DC::Key) -> Result<EntryKeySelector<DC>, Arc<DC::Error>> {
         check_error!(self);
@@ -499,7 +520,7 @@ where
             child_build!(
                 self,
                 EntryKeySelector<DC> {
-                    is_primary: pkey == key,
+                    primary: pkey == key,
                     key: key,
                     primary_key: pkey,
                 }
@@ -508,7 +529,7 @@ where
             child_build!(
                 self,
                 EntryKeySelector<DC> {
-                    is_primary: self.data_controller().is_primary(&key),
+                    primary: self.data_controller().is_primary(&key),
                     key: key,
                 }
             )
@@ -516,6 +537,8 @@ where
         .unwrap())
     }
 
+    /// Try to get a value from the cache by its key. If the value is not present, the controller attempts to fetch it
+    /// via the data controller. Returns `None` if such a key does not exist.
     #[instrument(level = "trace")]
     pub async fn get(&self, key: &DC::Key) -> Result<Option<DC::Value>, Arc<DC::Error>> {
         check_error!(self);
@@ -536,6 +559,8 @@ where
         })
     }
 
+    /// Insert a value into the cache. This operation triggers the [`on_new`](crate#on_new) data controller
+    /// chain of events even in case there is already a value present for the same key.
     #[instrument(level = "trace")]
     pub async fn insert(&self, value: DC::Value) -> Result<Option<DC::Value>, Arc<DC::Error>> {
         check_error!(self);
@@ -561,6 +586,10 @@ where
         }
     }
 
+    /// Delete a value from the cache by its key. If the value is not cached yet, it will be fetched from the backend
+    /// first. This behavior is subject to further optimization. In most cases, however, this should not be a problem
+    /// because if one knows what to delete without inspecting it first or using it in other ways, then it would be more
+    /// efficient to delete directly in the backend.
     #[instrument(level = "trace")]
     pub async fn delete(&self, key: &DC::Key) -> Result<Option<DC::Value>, Arc<DC::Error>> {
         check_error!(self);
@@ -578,6 +607,8 @@ where
         })
     }
 
+    /// Invalidate a key in the cache. A secondary key is invalidated by removing it from the cache, while a primary key
+    /// is invalidated by removing it and all its secondary keys from the cache.
     #[instrument(level = "trace")]
     pub async fn invalidate(&self, key: &DC::Key) -> Result<(), Arc<DC::Error>> {
         check_error!(self);
@@ -623,6 +654,8 @@ where
         count
     }
 
+    /// Low-level immediate flush operation that requires a list of keys to flush.  It does not check for
+    /// [error](#method.error) generated by the background task.
     pub async fn flush_many_raw(&self, keys: Vec<DC::Key>) -> Result<usize, DC::Error> {
         let update_iter = child_build!(
             self, UpdateIterator<DC> {
@@ -644,6 +677,8 @@ where
         Ok(updates_count)
     }
 
+    /// The same as the [`flush`](#method.flush) method but does not check for [error](#method.error) that may have
+    /// occurred in the background task.
     #[instrument(level = "trace")]
     pub async fn flush_raw(&self) -> Result<usize, DC::Error> {
         let update_keys = {
@@ -653,12 +688,19 @@ where
         self.flush_many_raw(update_keys).await
     }
 
+    /// Immediately flushes all updates in the pool but will do nothing and immediately error out if the background task
+    /// has encountered an [error](#method.error).
     #[instrument(level = "trace")]
     pub async fn flush(&self) -> Result<usize, Arc<DC::Error>> {
         check_error!(self);
         self.flush_raw().await.map_err(Arc::new)
     }
 
+    /// Initiates a flush via the background task.
+    ///
+    /// This method does not wait for the flush to complete; it returns immediately.
+    /// If the background task has previously encountered an [error](#method.error),
+    /// this method will do nothing and return that error.
     #[instrument(level = "trace")]
     pub async fn soft_flush(&self) -> Result<(), Arc<DC::Error>> {
         check_error!(self);
@@ -666,6 +708,14 @@ where
         Ok(())
     }
 
+    /// Flushes a single key in the cache. Although the operation itself is inefficient from the caching perspective, it
+    /// is useful in a multi-cache environment where values in one backend refer to values in another.  For example,
+    /// when there is a foreign key relationship between two tables in a database, a dependent record cannot be written
+    /// into the backend until its dependency is written first.
+    ///
+    /// This method is most useful when invoked by an [observer](crate#observers).
+    ///
+    /// Does nothing and returns an error if the background task has encountered an [error](#method.error).
     #[instrument(level = "trace")]
     pub async fn flush_one(&self, key: &DC::Key) -> Result<usize, Arc<DC::Error>> {
         check_error!(self);
@@ -849,6 +899,12 @@ where
         return self.flush_one(key).await;
     }
 
+    /// Prepares the cache for shutdown. This method will notify the background task to stop and flush all updates.
+    /// It will block until the task is finished.
+    ///
+    /// The method is mandatory to be called before the cache is dropped to ensure that no data is lost.
+    ///
+    /// Will do nothing and return an error if the background task has encountered an [error](#method.error).
     #[instrument(level = "trace")]
     pub async fn close(&self) -> Result<(), Arc<DC::Error>> {
         check_error!(self);
@@ -866,7 +922,8 @@ where
         Ok(())
     }
 
-    fn is_shut_down(&self) -> bool {
+    /// Returns the shutdown status of the cache.
+    pub fn is_shut_down(&self) -> bool {
         self.shutdown.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
@@ -888,6 +945,7 @@ impl<DC> CacheBuilder<DC>
 where
     DC: DataController,
 {
+    /// Adds an [observer](crate#observers) to the cache.
     pub fn observer(mut self, observer: impl Observer<DC>) -> Self {
         if let Some(ref mut observers) = self.observers {
             observers.push(Box::new(observer));

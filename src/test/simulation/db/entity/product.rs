@@ -29,6 +29,7 @@ pub struct Model {
     pub name: String,
     #[serde(rename = "p")]
     pub price: f64,
+    /// How many views the product listing has received.
     #[serde(rename = "v")]
     pub views: i64,
 }
@@ -38,7 +39,7 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-// Manager for product entity
+// The manager and data controller for the product model.
 #[fx_plus(
     child(DBCP, unwrap(or_else(SimErrorAny, super::dbcp_gone("product manager")))),
     sync,
@@ -52,6 +53,7 @@ impl<DBCP> Manager<DBCP>
 where
     DBCP: DBProvider,
 {
+    /// Get product by its ID.
     pub async fn get_by_product_id(&self, product_id: i32) -> Result<Vec<Model>> {
         debug!("Fetching product with ID: {}", product_id);
         Ok(Entity::find()
@@ -81,7 +83,6 @@ where
     type Value = Model;
 
     async fn get_for_key(&self, id: &Self::Key) -> Result<Option<Self::Value>> {
-        debug!("Fetching product for ID key: {}", id);
         Ok(Entity::find_by_id(*id)
             .one(&self.db_provider()?.db_connection()?)
             .await?)
