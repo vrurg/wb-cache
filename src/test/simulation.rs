@@ -60,14 +60,31 @@
 //!
 //! # Running the Simulation
 //!
+//! To run the simulation, execute one of the following commands:
+//!
 //! ```
-//! cargo run --example company -- --sqlite --test
+//! cargo run --profile release --feature sqlite --example company -- --sqlite --test
 //! ```
 //!
 //! or
 //!
 //! ```
-//! cargo run --example company -- --pg --test
+//! cargo run --profile release --features pg --example company -- --pg --test
+//! ```
+//!
+//! _**Note:** The release profile is optional but speeds up the caching code, yielding better benchmarking results._
+//!
+//! Running with the PostgreSQL driver requires connection parameters to be provided. This can be done either via the
+//! command line or environment variables. To see the available options, run:
+//!
+//! ```
+//! cargo run --features pg --example company -- --help
+//! ```
+//!
+//! or, to get full help:
+//!
+//! ```
+//! cargo run --all-features --example company -- --help
 //! ```
 pub mod actor;
 pub mod company_cached;
