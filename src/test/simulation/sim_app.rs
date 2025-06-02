@@ -244,16 +244,16 @@ pub struct EcommerceApp {
     #[fieldx(lazy, get, clearer, fallible)]
     script_writer: Arc<ScriptWriter>,
 
-    #[fieldx(lazy, get, fallible)]
+    #[fieldx(lazy, private, get, fallible)]
     tempdir: tempfile::TempDir,
 
     #[fieldx(lazy, fallible, get, clearer)]
     progress_ui: ProgressUI,
 
-    #[fieldx(lock, get(copy), set("_set_plain_per_sec"), default(0.0))]
+    #[fieldx(lock, private, get(copy), set("_set_plain_per_sec"), default(0.0))]
     plain_per_sec: f64,
 
-    #[fieldx(lock, get(copy), set("_set_cached_per_sec"), default(0.0))]
+    #[fieldx(lock, private, get(copy), set("_set_cached_per_sec"), default(0.0))]
     cached_per_sec: f64,
 }
 
