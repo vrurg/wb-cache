@@ -69,7 +69,6 @@
 pub mod cache;
 pub mod entry;
 pub mod entry_selector;
-#[cfg(any(test, feature = "test"))]
 pub mod test;
 pub mod traits;
 pub mod types;
