@@ -73,7 +73,7 @@ pub mod entry_selector;
 pub mod test;
 pub mod traits;
 pub mod types;
-pub(crate) mod update_iterator;
+pub mod update_iterator;
 pub(crate) mod update_state;
 
 #[doc(inline)]
