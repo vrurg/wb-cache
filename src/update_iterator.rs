@@ -62,6 +62,11 @@ where
         self.unprocessed().len()
     }
 
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.unprocessed().is_empty()
+    }
+
     pub fn next(&self) -> Option<UpdateIteratorItem<DC>> {
         let mut unprocessed = self.unprocessed_mut();
         loop {
