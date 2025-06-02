@@ -53,7 +53,7 @@ impl CustomerModel {
 
     pub fn adjust_growth_rate(&self, expected_customers: f64, day: i32) {
         let gr0 = 0.0;
-        let gr1 = 0.1;
+        let gr1 = 1.0;
 
         self.set_growth_rate(gr1);
 
@@ -62,7 +62,9 @@ impl CustomerModel {
                 self.set_growth_rate(gr);
                 self.expected_customers(day)
             })
-            .expect("failed to bisect growth rate"),
+            .unwrap_or_else(|err| {
+                panic!("failed to bisect growth rate for expected customers {expected_customers} on day {day}: {err}")
+            }),
         );
     }
 
