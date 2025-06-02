@@ -30,7 +30,9 @@ use tracing::instrument;
 
 use super::actor::TestActor;
 use super::db;
+#[cfg(feature = "pg")]
 use super::db::driver::pg::Pg;
+#[cfg(feature = "sqlite")]
 use super::db::driver::sqlite::Sqlite;
 use super::db::driver::DatabaseDriver;
 use super::db::entity::Customers;
