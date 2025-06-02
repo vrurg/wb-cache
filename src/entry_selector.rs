@@ -12,7 +12,7 @@ pub struct EntryKeySelector<DC>
 where
     DC: DataController,
 {
-    #[fieldx(predicate, get)]
+    #[fieldx(optional, get)]
     primary_key: DC::Key,
 
     #[fieldx(get)]
