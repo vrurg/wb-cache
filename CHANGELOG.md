@@ -1,10 +1,11 @@
 # Changelog
 
-## [unreleased]
+## [v0.1.0] - 2025-06-03
 
 ### Release Notes
 
 The initial crate release!
+
 
 ### Bug Fixes
 
