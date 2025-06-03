@@ -12,6 +12,11 @@
 {% else %}\
     ## [unreleased]
 {% endif %}\
+{% if message %}
+### Release Notes
+
+{{message}}
+{% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | striptags | trim | upper_first }}
     {% for commit in commits %}
