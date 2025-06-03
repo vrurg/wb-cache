@@ -123,4 +123,4 @@
     rustdoc-args = ["-Dwarnings"]
 
 [target.'cfg(windows)'.dependencies]
-    winapi = { version = "0.3.5", features = ["winnt"] }
+    winapi = { version = "0.3", features = ["errhandlingapi"] }
