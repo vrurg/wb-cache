@@ -98,7 +98,7 @@ impl<APP: SimulationApp, D: DatabaseDriver> TestCompany<APP, D> {
 }
 
 #[async_trait]
-impl<APP, D> TestActor for TestCompany<APP, D>
+impl<APP, D> TestActor<APP> for TestCompany<APP, D>
 where
     APP: SimulationApp,
     D: DatabaseDriver,

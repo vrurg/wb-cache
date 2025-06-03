@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use fieldx_plus::Agent;
 use indicatif::ProgressBar;
 use sea_orm::prelude::*;
 use tokio::time::Instant;
@@ -17,9 +18,14 @@ use super::scriptwriter::steps::ScriptTitle;
 use super::scriptwriter::steps::Step;
 use super::types::simerr;
 use super::types::SimError;
+use super::types::SimErrorAny;
+use super::SimulationApp;
 
 #[async_trait]
-pub trait TestActor: DBProvider + Debug {
+pub trait TestActor<APP>: DBProvider + Agent<RcApp = Result<Arc<APP>, SimErrorAny>> + Debug
+where
+    APP: SimulationApp + Send + Sync + 'static,
+{
     fn progress(&self) -> Result<Arc<Option<ProgressBar>>, SimError>;
     fn current_day(&self) -> i32;
     fn set_title(&self, title: &ScriptTitle) -> Result<(), SimError>;
