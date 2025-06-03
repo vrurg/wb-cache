@@ -113,7 +113,7 @@
     ]
 
 [dev-dependencies]
-    wb-cache = { path = ".", features = ["simulation", "sqlite"] }
+    wb-cache = { path = ".", features = ["simulation", "sqlite", "pg"] }
 
 [badges]
     github = { repository = "vrurg/fieldx_plus" }
