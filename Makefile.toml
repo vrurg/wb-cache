@@ -2,10 +2,12 @@ extend = "build-tools/std-makefile.toml"
 
 [env]
     #CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
-    __DOT_ARGS__               = "-Gdpi=300"
-    __MAKE_README_CRATE_ROOT__ = "."                        # In a workspace – a crate directory
-    __MAKE_TEST_TASKS__        = "test-default"
-    __MAKE_TOOLCHAINS__        = "1.82 stable beta nightly"
+    __DOT_ARGS__                 = "-Gdpi=300"
+    __MAKE_DOCS_RS_PACKAGES__    = "wb-cache"
+    __MAKE_README_CRATE_ROOT__   = "."                         # In a workspace – a crate directory
+    __MAKE_TEST_FIXED_FEATURES__ = "simulation,sqlite,pg"
+    __MAKE_TEST_TASKS__          = "test-default test-docs-rs"
+    __MAKE_TOOLCHAINS__          = "1.82 stable beta nightly"
 
 [config]
     default_to_workspace = false
