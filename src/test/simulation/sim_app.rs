@@ -124,11 +124,15 @@ pub(crate) struct Cli {
     /// Load the script from a file.
     #[clap(long, short)]
     #[garde(custom(Self::with_file(&self.script)))]
+    // This field is only used when either sqlite or pg features are enabled.
+    #[fieldx(get(attributes_fn(allow(unused))))]
     load: bool,
 
     /// Test the results of the simulation by comparing two databases.
     #[clap(long)]
     #[garde(skip)]
+    // This field is only used when either sqlite or pg features are enabled.
+    #[fieldx(get(attributes_fn(allow(unused))))]
     test: bool,
 
     #[cfg_attr(feature = "sqlite", clap(long))]
@@ -221,7 +225,8 @@ impl Cli {
                     "{} is more than {max_name} ({})",
                     *value, *max
                 )))
-            } else {
+            }
+            else {
                 Ok(())
             }
         }
@@ -231,7 +236,8 @@ impl Cli {
         move |value, _| {
             if *value && file.is_none() {
                 Err(garde::Error::new("Script file name is required"))
-            } else {
+            }
+            else {
                 Ok(())
             }
         }
@@ -257,16 +263,31 @@ pub struct EcommerceApp {
     #[fieldx(lazy, get, clearer, fallible)]
     script_writer: Arc<ScriptWriter>,
 
-    #[fieldx(lazy, private, get, fallible)]
+    // This field is only used when either sqlite or pg features are enabled.
+    #[fieldx(lazy, private, get(attributes_fn(allow(unused))), fallible)]
     tempdir: tempfile::TempDir,
 
     #[fieldx(lazy, fallible, get, clearer)]
     progress_ui: ProgressUI,
 
-    #[fieldx(lock, private, get(copy), set("_set_plain_per_sec"), default(0.0))]
+    // This field is only used when either sqlite or pg features are enabled.
+    #[fieldx(
+        lock,
+        private,
+        get(copy, attributes_fn(allow(unused))),
+        set("_set_plain_per_sec"),
+        default(0.0)
+    )]
     plain_per_sec: f64,
 
-    #[fieldx(lock, private, get(copy), set("_set_cached_per_sec"), default(0.0))]
+    // This field is only used when either sqlite or pg features are enabled.
+    #[fieldx(
+        lock,
+        private,
+        get(copy, attributes_fn(allow(unused))),
+        set("_set_cached_per_sec"),
+        default(0.0)
+    )]
     cached_per_sec: f64,
 }
 
@@ -274,7 +295,8 @@ impl EcommerceApp {
     fn build_cli(&self) -> Result<Cli, clap::Error> {
         Ok(if let Some(custom_args) = self.clear_cli_args() {
             Cli::try_parse_from(custom_args.into_iter())?
-        } else {
+        }
+        else {
             Cli::try_parse()?
         })
     }
@@ -459,7 +481,8 @@ impl EcommerceApp {
 
                 let rate = if myself.plain_per_sec() > 0.0 {
                     myself.cached_per_sec() / myself.plain_per_sec()
-                } else {
+                }
+                else {
                     0.0
                 };
 
@@ -600,6 +623,7 @@ impl EcommerceApp {
         Ok(script)
     }
 
+    #[cfg(feature = "sqlite")]
     fn db_dir(&self) -> Result<PathBuf, SimErrorAny> {
         self.cli()?
             .sqlite_path()
@@ -608,6 +632,7 @@ impl EcommerceApp {
             .map_or_else(|| self.tempdir().map(|t| t.path().to_path_buf()), Ok)
     }
 
+    #[cfg(any(feature = "pg", feature = "sqlite"))]
     #[instrument(level = "trace", skip(script, self))]
     async fn execute_per_db(&self, script: Vec<Step>) -> Result<(), SimErrorAny> {
         let cli = self.cli()?;
@@ -810,7 +835,8 @@ impl EcommerceApp {
                 .truncate(true)
                 .open(log_file)?;
             Box::new(file) as Box<dyn io::Write + Send>
-        } else {
+        }
+        else {
             Box::new(io::stdout()) as Box<dyn io::Write + Send>
         });
 
@@ -874,15 +900,21 @@ impl EcommerceApp {
             return tokio::task::spawn_blocking(move || myself.save_script()).await?;
         }
 
-        let script = if cli.load() {
-            self.load_script()?
-        } else {
-            let s = self.script_writer()?.create()?;
-            self.clear_script_writer();
-            s
-        };
+        #[cfg(any(feature = "pg", feature = "sqlite"))]
+        {
+            let script = if cli.load() {
+                self.load_script()?
+            }
+            else {
+                let s = self.script_writer()?.create()?;
+                self.clear_script_writer();
+                s
+            };
 
-        self.execute_per_db(script).await
+            self.execute_per_db(script).await?;
+        }
+
+        Ok(())
     }
 
     pub async fn run() -> Result<(), SimErrorAny> {
