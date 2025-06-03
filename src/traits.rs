@@ -47,11 +47,10 @@ pub trait DataController: Sized + Send + Sync + 'static {
     ///
     /// Example: [`DCCommon::wbdc_write_back()`](crate::test::simulation::db::cache::DCCommon::wbdc_write_back).
     async fn write_back(&self, updates: Arc<UpdateIterator<Self>>) -> Result<(), Self::Error>;
-    /// Called when a new record is added to the cache. On success, it must return a
-    /// [`DataControllerResponse`](crate::types::DataControllerResponse) with the operation type set to what the
-    /// data controller considers appropriate for the new record. For example, if it is known that the new record will
-    /// have exactly the same field values after being written to the backend as it had when submitted to this method,
-    /// then the operation can be set to [`DataControllerOp::Insert`].
+    /// Called when a new record is added to the cache. On success, it must return a [`DataControllerResponse`] with the
+    /// operation type set to what the data controller considers appropriate for the new record. For example, if it is
+    /// known that the new record will have exactly the same field values after being written to the backend as it had
+    /// when submitted to this method, then the operation can be set to [`DataControllerOp::Insert`].
     ///
     /// Example: [`DCCommon::wbdbc_on_new()`](crate::test::simulation::db::cache::DCCommon::wbdbc_on_new). The trait
     /// classifies DB models into two categories: immutable and mutable. Immutable models do not modify written records
