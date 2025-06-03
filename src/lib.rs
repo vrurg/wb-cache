@@ -151,7 +151,7 @@
 //! builder](cache::CacheBuilder). For instance, if your controller type is `MyDataController`, you can integrate it
 //! like this:
 //!
-//! ```no_run
+//! ```ignore
 //! use wb_cache::{Cache, prelude::*};
 //! use my_crate::MyDataController;
 //!
