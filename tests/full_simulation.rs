@@ -1,7 +1,8 @@
-#![cfg(all(feature = "simulation", feature = "sqlite"))]
+#![cfg(feature = "simulation")]
 
 use wb_cache::test::simulation::sim_app::EcommerceApp;
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn full_simulation_sqlite() -> Result<(), Box<dyn std::error::Error>> {
     // Use relatively relaxed parameters for the simulation to ensure it runs quickly.
