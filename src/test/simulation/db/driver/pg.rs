@@ -15,11 +15,11 @@ use super::DatabaseDriver;
 #[derive(Debug)]
 #[fxstruct(sync, rc, no_new, builder)]
 pub struct Pg {
-    host: String,
-    port: u16,
-    user: String,
-    password: String,
-    database: String,
+    host:       String,
+    port:       u16,
+    user:       String,
+    password:   String,
+    database:   String,
     #[fieldx(inner_mut, get(off), set, builder(off))]
     connection: DatabaseConnection,
 }

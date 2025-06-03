@@ -191,7 +191,7 @@ pub mod prelude {
 macro_rules! wbdc_response {
     ($op:expr, $update:expr) => {
         $crate::types::DataControllerResponse {
-            op: $op,
+            op:     $op,
             update: $update,
         }
     };

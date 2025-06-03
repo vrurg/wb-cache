@@ -45,15 +45,15 @@ pub struct RndPool {
 
     // Expected customer orders per day parameters.
     #[fieldx(get(copy), default(0.15))]
-    min_customer_orders: f64,
+    min_customer_orders:    f64,
     /// This value is not a hard upper limit but the boundary within which min_max_order_fraction of randomly generated
     /// customer expected daily orders will fall. (1 - min_max_order_fraction) of all customers may get a higher value.
     #[fieldx(get(copy), default(3.))]
-    max_customer_orders: f64,
+    max_customer_orders:    f64,
     #[fieldx(get(copy), default(0.95))]
     min_max_order_fraction: f64,
     #[fieldx(copy, default(2.0))]
-    orders_gamma_shape: f64,
+    orders_gamma_shape:     f64,
 
     // Erratic quotient parameters.
     /// Similarly to max_customer_orders, this value is not a hard upper limit.
@@ -61,9 +61,9 @@ pub struct RndPool {
     max_erratic_quotient: f64,
     /// Fraction of erratic quotient values to fall into 0..max_erratic_quotient range.
     #[fieldx(get(copy), default(0.9))]
-    eq_fraction: f64,
+    eq_fraction:          f64,
     #[fieldx(get(copy), default(2.))]
-    eq_gamma_shape: f64,
+    eq_gamma_shape:       f64,
 
     #[fieldx(copy, default(0.00001))]
     tolerance: f64,

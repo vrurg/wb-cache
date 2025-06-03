@@ -13,8 +13,8 @@ use super::entity::inventory::InventoryCheck;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScriptTitle {
-    pub period: i32,
-    pub products: i32,
+    pub period:          i32,
+    pub products:        i32,
     pub market_capacity: u32,
 }
 

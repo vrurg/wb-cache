@@ -27,14 +27,14 @@ use crate::DataController;
 pub struct Model {
     #[sea_orm(primary_key)]
     #[serde(rename = "i")]
-    pub id: i32,
+    pub id:            i32,
     #[sea_orm(unique, indexed)]
     #[serde(rename = "e")]
-    pub email: String,
+    pub email:         String,
     #[serde(rename = "f")]
-    pub first_name: String,
+    pub first_name:    String,
     #[serde(rename = "l")]
-    pub last_name: String,
+    pub last_name:     String,
     /// The simulation day number when the user was registered.
     #[serde(rename = "d")]
     pub registered_on: i32,

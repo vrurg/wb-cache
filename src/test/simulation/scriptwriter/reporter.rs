@@ -293,7 +293,8 @@ impl FormattedReporter {
                 term.clear_line()?;
                 term.write_line(&msg.to_string())?;
             }
-        } else {
+        }
+        else {
             for msg in messages {
                 println!("{msg}");
             }
@@ -315,7 +316,8 @@ impl FormattedReporter {
             if duration >= interval {
                 self.refresh_report()?;
                 next_interval = interval;
-            } else {
+            }
+            else {
                 // If a refresh took place while we slept then sleep the remaining time to make it a full interval.
                 next_interval = interval - duration;
             }
@@ -433,7 +435,8 @@ impl SwReporter for FormattedReporter {
             }
             term.move_cursor_to(0, t_height as usize - 1)?;
             term.flush()?;
-        } else {
+        }
+        else {
             for line in status_lines {
                 println!("{line}");
             }

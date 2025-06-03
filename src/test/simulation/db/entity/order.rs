@@ -24,17 +24,17 @@ use crate::DataController;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "i")]
-    pub id: Uuid,
+    pub id:           Uuid,
     #[serde(rename = "c")]
-    pub customer_id: i32,
+    pub customer_id:  i32,
     #[serde(rename = "p")]
-    pub product_id: i32,
+    pub product_id:   i32,
     // Order size in items.
     #[serde(rename = "q")]
-    pub quantity: i32,
+    pub quantity:     i32,
     /// The current status of the order.
     #[serde(rename = "s")]
-    pub status: OrderStatus,
+    pub status:       OrderStatus,
     /// The day number when the order was placed.
     #[serde(rename = "d")]
     pub purchased_on: i32,

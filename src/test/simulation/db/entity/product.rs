@@ -24,9 +24,9 @@ use tracing::debug;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "i")]
-    pub id: i32,
+    pub id:    i32,
     #[serde(rename = "n")]
-    pub name: String,
+    pub name:  String,
     #[serde(rename = "p")]
     pub price: f64,
     /// How many views the product listing has received.

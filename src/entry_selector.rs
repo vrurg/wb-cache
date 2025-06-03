@@ -45,7 +45,8 @@ where
         let parent = self.parent();
         Ok(if self.primary {
             parent.get_and_try_compute_with_primary(self.key(), callback).await?
-        } else {
+        }
+        else {
             parent.get_and_try_compute_with_secondary(self.key(), callback).await?
         })
     }
@@ -60,7 +61,8 @@ where
         let parent = self.parent();
         if self.primary {
             parent.get_or_try_insert_with_primary(self.key(), init).await
-        } else {
+        }
+        else {
             parent.get_or_try_insert_with_secondary(self.key(), init).await
         }
     }

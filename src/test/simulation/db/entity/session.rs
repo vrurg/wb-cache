@@ -24,13 +24,13 @@ use serde::Serialize;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "i")]
-    pub id: i64,
+    pub id:          i64,
     /// If the session was used to login then it will get an associated customer ID.
     #[serde(rename = "c")]
     pub customer_id: Option<i32>,
     /// On what simulation day the session must be expired.
     #[serde(rename = "e")]
-    pub expires_on: i32,
+    pub expires_on:  i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

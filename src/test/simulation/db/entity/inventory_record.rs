@@ -23,10 +23,10 @@ use crate::DataController;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[serde(rename = "p")]
-    pub product_id: i32,
+    pub product_id:    i32,
     /// The current number of items in stock.
     #[serde(rename = "s")]
-    pub stock: i64,
+    pub stock:         i64,
     /// How many days does it take to fulfill an order for this product.
     #[serde(rename = "h")]
     pub handling_days: i16,

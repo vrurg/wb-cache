@@ -15,7 +15,7 @@ pub struct Entry<DC>
 where
     DC: DataController,
 {
-    key: DC::Key,
+    key:   DC::Key,
     value: DC::Value,
 }
 

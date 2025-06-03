@@ -102,7 +102,8 @@ impl ProgressUI {
     fn build_multi_progress(&self) -> Option<MultiProgress> {
         if self.user_attended() {
             Some(MultiProgress::new())
-        } else {
+        }
+        else {
             None
         }
     }
@@ -148,7 +149,8 @@ impl ProgressUI {
         let prefix = self.message_style(msg_type).apply_to(format!("[{msg_type}]"));
         if matches!(msg_type, MsgType::Info) {
             println!("{prefix} {msg}");
-        } else {
+        }
+        else {
             eprintln!("{prefix} {msg}");
         }
     }
@@ -159,7 +161,8 @@ impl ProgressUI {
             mp.suspend(|| {
                 self._println(msg_type, msg);
             })
-        } else {
+        }
+        else {
             self._println(msg_type, msg);
         }
     }
@@ -207,7 +210,8 @@ impl ProgressUI {
                     mp.maybe_insert_after(after, ProgressBar::new_spinner().with_style(style.clone()))
                 }
             }
-        } else {
+        }
+        else {
             mp.maybe_add(ProgressBar::new(0).with_style(style.clone()))
         }
     }

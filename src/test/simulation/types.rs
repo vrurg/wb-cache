@@ -168,7 +168,8 @@ impl SimErrorAny {
         let inner = self.0.read();
         if env::var("RUST_BACKTRACE").is_ok() {
             format!("{msg}: {inner:?}")
-        } else {
+        }
+        else {
             format!("{msg}: {inner:#}")
         }
     }
@@ -177,7 +178,8 @@ impl SimErrorAny {
         let inner = self.0.read();
         if env::var("RUST_BACKTRACE").is_ok() {
             eprintln!("{msg}: {inner:?}");
-        } else {
+        }
+        else {
             eprintln!("{msg}: {inner:#}");
         }
     }
@@ -220,5 +222,5 @@ pub struct Script {
     #[serde(rename = "l")]
     pub length: usize,
     #[serde(rename = "s")]
-    pub steps: Vec<Step>,
+    pub steps:  Vec<Step>,
 }

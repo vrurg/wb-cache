@@ -7,25 +7,25 @@ use crate::test::simulation::types::OrderStatus;
 #[derive(Clone, Debug)]
 pub struct Order {
     /// The order id.
-    pub id: Uuid,
+    pub id:          Uuid,
     /// The customer id.
     pub customer_id: i32,
     /// The product id.
-    pub product_id: i32,
+    pub product_id:  i32,
     /// The quantity of the product.
-    pub quantity: i32,
+    pub quantity:    i32,
     /// The status of the order.
-    pub status: OrderStatus,
+    pub status:      OrderStatus,
 }
 
 impl From<Order> for crate::test::simulation::db::entity::Order {
     fn from(order: Order) -> Self {
         Self {
-            id: order.id,
-            customer_id: order.customer_id,
-            product_id: order.product_id,
-            quantity: order.quantity,
-            status: order.status,
+            id:           order.id,
+            customer_id:  order.customer_id,
+            product_id:   order.product_id,
+            quantity:     order.quantity,
+            status:       order.status,
             purchased_on: 0, // Placeholder, as this field is not present in the struct
         }
     }

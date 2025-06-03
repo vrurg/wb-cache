@@ -218,7 +218,8 @@ where
                 ValueState::Primary(_) => key.clone(),
                 ValueState::Secondary(ref k) => k.clone(),
             })
-        } else {
+        }
+        else {
             self.data_controller().get_primary_key_for(key).await?
         })
     }
@@ -250,7 +251,8 @@ where
                         Some(old_v),
                         false,
                     )
-                } else {
+                }
+                else {
                     let old_v = myself.data_controller().get_for_key(key).await?;
                     old_v.map_or((None, None, false), |v| {
                         (Some(Entry::new(&myself, key.clone(), v.clone())), Some(v), true)
@@ -275,7 +277,8 @@ where
                         let v = Arc::new(v);
                         if let Some(old_v) = old_v {
                             myself.on_change(key, v, old_v).await?
-                        } else {
+                        }
+                        else {
                             myself.on_new(key, v).await?
                         }
                     }
@@ -283,7 +286,8 @@ where
                         // Even if user wants to do nothing we still need to put the newly fetched value into cache.
                         if fetched {
                             Op::Put(ValueState::Primary(old_v.unwrap()))
-                        } else {
+                        }
+                        else {
                             Op::Nop
                         }
                     }
@@ -328,7 +332,8 @@ where
                             "Key '{key}' is submitted as a secondary but the corresponding cache entry is primary"
                         ),
                     })
-                } else {
+                }
+                else {
                     self.get_primary_key_from(key).await?
                 };
 
@@ -340,13 +345,15 @@ where
                             // Some(Entry::new(&myself, secondary_key, entry.value().await?.clone()))
                             // XXX Temporary!
                             Some(Entry::new(&myself, secondary_key, entry.value().await.unwrap().clone()))
-                        } else {
+                        }
+                        else {
                             None
                         };
                         f(secondary_entry).await
                     })
                     .await?
-                } else {
+                }
+                else {
                     // We don't know the primary key yet. Get the user's response and see what to do with it.
                     // Since the primary key will be known only if the user has provided a value it is only possible
                     // to use the get_and_try_compute_with_primary method if Op::Put is returned.
@@ -406,7 +413,8 @@ where
                 Ok(ValueState::Primary(
                     if let Some(v) = self.data_controller().get_for_key(key).await? {
                         v
-                    } else {
+                    }
+                    else {
                         let new_value = init.await?;
                         self.on_new(key, Arc::new(new_value.clone())).await?;
                         new_value
@@ -429,15 +437,18 @@ where
             .entry(key.clone())
             .and_try_compute_with(|entry| async {
                 let primary_key = if let Some(entry) = entry {
-                    let ValueState::Secondary(pkey) = entry.value() else {
+                    let ValueState::Secondary(pkey) = entry.value()
+                    else {
                         panic!("Not a secondary key: '{key}'")
                     };
                     self.get_or_try_insert_with_primary(pkey, init).await?;
                     pkey.clone()
-                } else if let Some(pkey) = myself.data_controller().get_primary_key_for(key).await? {
+                }
+                else if let Some(pkey) = myself.data_controller().get_primary_key_for(key).await? {
                     self.get_or_try_insert_with_primary(&pkey, init).await?;
                     pkey
-                } else {
+                }
+                else {
                     let new_value = init.await?;
                     let pkey = self.data_controller().primary_key_of(&new_value);
                     self.insert(new_value).await?;
@@ -489,7 +500,8 @@ where
             if !updates.contains_key(&update_key) {
                 update_state = child_build!(self, UpdateState<DC>).unwrap();
                 updates.insert(key.clone(), Arc::clone(&update_state));
-            } else {
+            }
+            else {
                 update_state = updates.get(&update_key).unwrap().clone();
             }
             // At this point, the update state has at least two references, which protects it from being collected by
@@ -525,7 +537,8 @@ where
                     primary_key: pkey,
                 }
             )
-        } else {
+        }
+        else {
             child_build!(
                 self,
                 EntryKeySelector<DC> {
@@ -828,7 +841,8 @@ where
             DataControllerOp::Insert => {
                 if let Some(value) = value {
                     Op::Put(ValueState::Primary(value.as_ref().clone()))
-                } else {
+                }
+                else {
                     Op::Nop
                 }
             }
@@ -951,7 +965,8 @@ where
         if let Some(ref mut observers) = self.observers {
             observers.push(Box::new(observer));
             self
-        } else {
+        }
+        else {
             self._observers(vec![Box::new(observer)])
         }
     }

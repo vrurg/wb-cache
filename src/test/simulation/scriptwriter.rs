@@ -81,14 +81,14 @@ enum TaskData {
 
 #[derive(Clone, Debug)]
 struct PurchaseTask {
-    customers: Vec<Arc<Customer>>,
+    customers:         Vec<Arc<Customer>>,
     product_interests: Arc<Vec<(i32, f64)>>,
 }
 
 #[derive(Clone, Debug)]
 struct Task {
     data: TaskData,
-    tx: Sender<Result<()>>,
+    tx:   Sender<Result<()>>,
 }
 
 impl Task {
@@ -112,7 +112,7 @@ impl TaskResult {
 pub struct ScriptWriter {
     /// Supress all output.
     #[fieldx(get(copy), builder)]
-    quiet: bool,
+    quiet:  bool,
     /// For how many days the scenario will run.
     #[fieldx(default(365), builder)]
     period: i32,
@@ -218,9 +218,9 @@ pub struct ScriptWriter {
 
     // --- Workers pool related
     #[fieldx(lazy, clearer, private, builder(off), get)]
-    task_tx: Sender<Task>,
+    task_tx:       Sender<Task>,
     #[fieldx(lazy, private, builder(off), get(copy))]
-    worker_count: usize,
+    worker_count:  usize,
     #[fieldx(lock, private, get, get_mut, builder(off))]
     task_handlers: Vec<std::thread::JoinHandle<usize>>,
 
@@ -266,8 +266,8 @@ impl ScriptWriter {
         self.reporter().start()?;
 
         self.add_step(Step::Title(ScriptTitle {
-            period: self.period,
-            products: self.product_count(),
+            period:          self.period,
+            products:        self.product_count(),
             market_capacity: self.market_capacity,
         }))?;
 
@@ -501,9 +501,9 @@ impl ScriptWriter {
 
         for _ in 0..todays_sessions {
             self.add_step(Step::AddSession(DbSession {
-                id: self.next_session_id(),
+                id:          self.next_session_id(),
                 customer_id: None,
-                expires_on: day + 3,
+                expires_on:  day + 3,
             }))?;
         }
 
@@ -518,7 +518,8 @@ impl ScriptWriter {
 
         loop {
             let task = {
-                let Ok(task) = rx.recv() else {
+                let Ok(task) = rx.recv()
+                else {
                     break;
                 };
                 task
@@ -570,7 +571,8 @@ impl ScriptWriter {
                 product.supplier_inaccuracy(),
                 product.supplier_tardiness(),
             ))?;
-        } else {
+        }
+        else {
             self.clear_track_product();
         }
 
@@ -618,7 +620,8 @@ impl ScriptWriter {
         if order.status == OrderStatus::New || order.status == OrderStatus::Recheck {
             let new_order = order.status == OrderStatus::New;
             let mut inventory = self.inventory_mut();
-            let Some(inv_rec) = inventory.get_mut(order.product_id as usize) else {
+            let Some(inv_rec) = inventory.get_mut(order.product_id as usize)
+            else {
                 return Err(simerr!("Product {} not found in inventory", order.product_id));
             };
 
@@ -627,10 +630,12 @@ impl ScriptWriter {
                 order.status = OrderStatus::Backordered;
                 if new_order {
                     post_proc = AddPostProc::BackorderNew(order.product_id);
-                } else {
+                }
+                else {
                     post_proc = AddPostProc::BackorderAgain(order.product_id);
                 }
-            } else {
+            }
+            else {
                 order.status = OrderStatus::Pending;
                 if inv_rec.handling_days() > 0 {
                     // If this inventory entry requires extra processing then the order goes into the pending queue.
@@ -639,7 +644,8 @@ impl ScriptWriter {
                     //     .entry(self.current_day() + inv_rec.handling_days() as i32)
                     //     .or_default()
                     //     .push_back(order.clone());
-                } else {
+                }
+                else {
                     // Same-day shipping: a pending step is still needed because the warehouse must process the request
                     // before dispatch, so a post-processing step is added to proceed with the shipment.
                     let mut shipping_order = order.clone();
@@ -821,9 +827,9 @@ impl ScriptWriter {
 
         // A new session.
         let session = DbSession {
-            id: self.next_session_id(),
+            id:          self.next_session_id(),
             customer_id: Some(customer_id),
-            expires_on: self.current_day() + LOGIN_EXPIRE_DAYS,
+            expires_on:  self.current_day() + LOGIN_EXPIRE_DAYS,
         };
         self.customer_sessions_mut()[customer_id as usize - 1] = Some(session.clone());
         self.add_step(Step::AddSession(session))?;
@@ -877,7 +883,8 @@ impl ScriptWriter {
 
             let arrives_on = if initial {
                 1
-            } else {
+            }
+            else {
                 if let Some(inv_rec) = inventory.get(product_id as usize) {
                     // If we still have enough stock, we don't need to order anything.
                     if inv_rec.stock() > batch_size as i64 {
@@ -1038,7 +1045,8 @@ impl ScriptWriter {
                                 order.status = OrderStatus::Recheck;
                                 // Submit backordered order for processing.
                                 inv_steps.push(Step::UpdateOrder(order));
-                            } else {
+                            }
+                            else {
                                 // Not enough stock to fulfill the order, leave it in the backorder queue.
                                 break;
                             }
@@ -1065,7 +1073,8 @@ impl ScriptWriter {
     fn fulfill_pending(&self) -> Result<()> {
         let mut pending_orders = self.pending_orders_mut();
 
-        let Some(indicies) = pending_orders.remove(&self.current_day()) else {
+        let Some(indicies) = pending_orders.remove(&self.current_day())
+        else {
             return Ok(());
         };
 
@@ -1111,7 +1120,7 @@ impl ScriptWriter {
             let cust_chunk = cust_chunk.to_vec();
 
             let task = PurchaseTask {
-                customers: cust_chunk,
+                customers:         cust_chunk,
                 product_interests: prod_sale_rate.clone(),
             };
 
@@ -1133,7 +1142,8 @@ impl ScriptWriter {
 
         if succeed {
             Ok(())
-        } else {
+        }
+        else {
             Err(simerr!("Order processing was not successful"))
         }
     }
@@ -1151,7 +1161,8 @@ impl ScriptWriter {
 
     fn order_by_idx(&self, idx: usize) -> Result<DbOrder> {
         let steps = self.steps();
-        let Some(step) = steps.get(idx) else {
+        let Some(step) = steps.get(idx)
+        else {
             return Err(simerr!("Step index {} not found", idx));
         };
         Ok(match step {
@@ -1216,7 +1227,8 @@ impl ScriptWriter {
     fn build_reporter(&self) -> Reporter {
         if self.quiet() {
             Reporter::Quiet
-        } else {
+        }
+        else {
             Reporter::Formatted(child_build!(self, FormattedReporter).unwrap())
         }
     }
@@ -1227,7 +1239,7 @@ impl ScriptWriter {
             RndPool {
                 min_customer_orders: self.min_customer_orders,
                 max_customer_orders: self.max_customer_orders,
-                customers_full: 100,
+                customers_full:      100,
             }
         )
         .unwrap()

@@ -1,7 +1,9 @@
-use fieldx_plus::{child_build, fx_plus};
+use fieldx_plus::child_build;
+use fieldx_plus::fx_plus;
 use tokio::sync::OwnedRwLockWriteGuard;
 
-use crate::{Cache, DataController};
+use crate::Cache;
+use crate::DataController;
 
 type KeyGuard<DC> = (
     <DC as DataController>::Key,
@@ -95,7 +97,8 @@ where
                 return None;
             }
 
-            let Some((key, guard)) = unprocessed.get_mut(next_idx).map(|(k, g)| (k.clone(), g.take())) else {
+            let Some((key, guard)) = unprocessed.get_mut(next_idx).map(|(k, g)| (k.clone(), g.take()))
+            else {
                 panic!(
                     "Internal error of UpdateIterator<{}>: next update key not found at index {next_idx}",
                     std::any::type_name::<DC>()
@@ -106,18 +109,21 @@ where
 
             let guard = if let Some(g) = guard {
                 g
-            } else if let Some(update) = self.parent().updates().get(&key).cloned() {
+            }
+            else if let Some(update) = self.parent().updates().get(&key).cloned() {
                 // Either we're able to get a write lock immediately or we skip this update. This way two problems are
                 // avoided:
                 //
                 // 1. Deadlock: waiting for the update lock may block the entire cache.
                 // 2. A locked update is assumed to be already processed by another thread, typically as a result of
                 //    flush_one call.
-                let Ok(guard) = update.data.clone().try_write_owned() else {
+                let Ok(guard) = update.data.clone().try_write_owned()
+                else {
                     continue;
                 };
                 guard
-            } else {
+            }
+            else {
                 // Skip if there is no update for this key. Most likely it was already flushed.
                 continue;
             };
@@ -209,7 +215,8 @@ where
     pub fn confirm(mut self) {
         if let Some(mut guard) = self.key_guard.take() {
             guard.1.take();
-        } else {
+        }
+        else {
             unreachable!("Internal error: guard is None");
         }
     }

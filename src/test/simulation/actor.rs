@@ -78,7 +78,8 @@ where
                 )
                 .into());
             }
-        } else {
+        }
+        else {
             return Err(simerr!("Inventory record not found for product ID {}", product_id).into());
         }
 
@@ -175,7 +176,8 @@ where
 
         if res.rows_affected == 0 {
             self.progress()?.maybe_set_message("");
-        } else {
+        }
+        else {
             self.progress()?
                 .maybe_set_message(format!("Collected {} sessions", res.rows_affected));
         }

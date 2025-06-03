@@ -5,9 +5,9 @@ use serde::Serialize;
 #[derive(Clone, Debug)]
 #[fxstruct(no_new, builder, get(copy))]
 pub struct InventoryRecord {
-    product_id: i32,
+    product_id:    i32,
     #[fieldx(get_mut)]
-    stock: i64,
+    stock:         i64,
     handling_days: i16,
 }
 
@@ -24,8 +24,8 @@ impl InventoryRecord {
 impl From<InventoryRecord> for crate::test::simulation::db::entity::InventoryRecord {
     fn from(record: InventoryRecord) -> Self {
         Self {
-            product_id: record.product_id,
-            stock: record.stock,
+            product_id:    record.product_id,
+            stock:         record.stock,
             handling_days: record.handling_days,
         }
     }
@@ -46,9 +46,9 @@ pub struct InventoryCheck {
     #[serde(rename = "p")]
     pub product_id: i32,
     #[serde(rename = "s")]
-    pub stock: i64,
+    pub stock:      i64,
     #[serde(rename = "c")]
-    pub comment: String,
+    pub comment:    String,
 }
 
 impl InventoryCheck {

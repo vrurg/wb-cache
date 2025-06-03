@@ -192,7 +192,8 @@ where
         product_id: i32,
         quantity: i64,
     ) -> Result<(), SimError> {
-        let Some(inventory_record) = InventoryRecords::find_by_id(product_id).one(db).await? else {
+        let Some(inventory_record) = InventoryRecords::find_by_id(product_id).one(db).await?
+        else {
             return Err(simerr!(
                 "Can't update non-existing inventory record for product ID: {}",
                 product_id
@@ -278,7 +279,8 @@ where
 
         if res.rows_affected == 0 {
             self.progress()?.maybe_set_message("");
-        } else {
+        }
+        else {
             self.progress()?
                 .maybe_set_message(format!("Collected {} sessions", res.rows_affected));
         }

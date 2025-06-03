@@ -1,5 +1,7 @@
-use crate::{entry::Entry, traits::DataController};
-use std::{fmt::Debug, sync::Arc};
+use crate::entry::Entry;
+use crate::traits::DataController;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 /// The result of a compute operation on an entry. Results that affect the cache content are reflected in the
 /// controller's update pool.
@@ -74,7 +76,7 @@ where
     DC: DataController,
 {
     /// The operation that the data controller suggests to perform with the value associated with the processed request.
-    pub op: DataControllerOp,
+    pub op:     DataControllerOp,
     /// The update record produced by the data controller. If it is not `None` then the cache controller must put it
     /// into the update pool and will later pass it into the
     /// [`DataController::write_back()`](crate::traits::DataController::write_back) method.

@@ -7,19 +7,19 @@ pub struct CustomerModel {
     /// The initial number of customers.
     initial_customers: f64,
     /// The maximum number of customers the company can have.
-    market_capacity: f64,
+    market_capacity:   f64,
     /// Where customer base growth reaches its peak.
-    inflection_point: f64,
+    inflection_point:  f64,
     /// Company's "success" rate – how fast the customer base grows
     #[fieldx(lock, set)]
-    growth_rate: f64,
+    growth_rate:       f64,
     /// Precision of the bisection method
     #[fieldx(default(0.0001))]
-    tolerance: f64,
+    tolerance:         f64,
     #[fieldx(private, set, builder(off))]
-    v: f64,
+    v:                 f64,
     #[fieldx(private, set, builder(off))]
-    q: f64,
+    q:                 f64,
 }
 
 impl CustomerModel {

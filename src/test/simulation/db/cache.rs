@@ -136,7 +136,8 @@ where
                 let am_list = inserts
                     .iter()
                     .map(|i: &UpdateIteratorItem<Self>| {
-                        let CacheUpdates::<T::ActiveModel>::Insert(am) = i.update() else {
+                        let CacheUpdates::<T::ActiveModel>::Insert(am) = i.update()
+                        else {
                             unreachable!("Expected insert update, but got: {:?}", i.update())
                         };
                         am
@@ -152,7 +153,8 @@ where
                 let delete_chunk = deletes
                     .iter()
                     .map(|i: &UpdateIteratorItem<Self>| {
-                        let CacheUpdates::<T::ActiveModel>::Delete = i.update() else {
+                        let CacheUpdates::<T::ActiveModel>::Delete = i.update()
+                        else {
                             unreachable!("Expected delete update, but got: {:?}", i.update())
                         };
                         i.key()
@@ -206,7 +208,8 @@ where
     {
         let op = if IMMUTABLE {
             DataControllerOp::Insert
-        } else {
+        }
+        else {
             DataControllerOp::Nop
         };
         Ok(wbdc_response!(op, Some(CacheUpdates::Insert(value.clone().into()))))
@@ -231,7 +234,8 @@ where
             // The perfect case where an insert update hasn't been written to the backend yet and can be just dropped
             // altogether.
             DataControllerOp::Drop
-        } else {
+        }
+        else {
             // In other cases we only request for cache removal and expect the next flush to remove the data from the
             // backend.
             DataControllerOp::Revoke
@@ -265,7 +269,8 @@ where
                 CacheUpdates::Insert(a) => a.clone(),
                 CacheUpdates::Update(a) => a.clone(),
             }
-        } else {
+        }
+        else {
             old_value.into()
         };
 
@@ -278,7 +283,8 @@ where
                 changed = true;
                 if let Some(v) = new_v.into_value() {
                     prev_am.set(c, v);
-                } else {
+                }
+                else {
                     prev_am.not_set(c);
                 }
             }
@@ -287,7 +293,8 @@ where
         // With IMMUTABLE model we can safely put the changed data record back into the cache.
         let op = if changed && IMMUTABLE {
             DataControllerOp::Insert
-        } else {
+        }
+        else {
             DataControllerOp::Nop
         };
 
@@ -297,10 +304,12 @@ where
         let update = if changed {
             Some(if prev_update.is_none() {
                 CacheUpdates::Update(prev_am)
-            } else {
+            }
+            else {
                 prev_update.unwrap().replace(prev_am)
             })
-        } else {
+        }
+        else {
             prev_update
         };
 

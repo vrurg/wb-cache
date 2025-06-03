@@ -68,7 +68,8 @@ impl MaybeProgress for Option<ProgressBar> {
     fn maybe_per_sec(&self) -> f64 {
         if let Some(pb) = self {
             pb.per_sec()
-        } else {
+        }
+        else {
             0.0
         }
     }
@@ -93,7 +94,8 @@ impl MaybeMultiProgress for Option<MultiProgress> {
         self.as_ref().map(|mp| {
             if let Some(before) = before {
                 mp.insert_before(before, pb)
-            } else {
+            }
+            else {
                 mp.add(pb)
             }
         })
@@ -103,10 +105,12 @@ impl MaybeMultiProgress for Option<MultiProgress> {
         if let Some(mp) = self {
             if let Some(after) = after {
                 Some(mp.insert_after(after, pb))
-            } else {
+            }
+            else {
                 Some(mp.add(pb))
             }
-        } else {
+        }
+        else {
             None
         }
     }
