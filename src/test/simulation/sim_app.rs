@@ -251,7 +251,7 @@ pub struct EcommerceApp {
     #[fieldx(inner_mut, clearer, builder("_cli_args"))]
     cli_args: Vec<String>,
 
-    #[fieldx(lazy, private, fallible, get(clone))]
+    #[fieldx(lazy, private, fallible(error(clap::Error)), get(clone))]
     cli: Cli,
 
     #[fieldx(lazy, get, clearer, fallible)]
@@ -271,7 +271,7 @@ pub struct EcommerceApp {
 }
 
 impl EcommerceApp {
-    fn build_cli(&self) -> Result<Cli, SimErrorAny> {
+    fn build_cli(&self) -> Result<Cli, clap::Error> {
         Ok(if let Some(custom_args) = self.clear_cli_args() {
             Cli::try_parse_from(custom_args.into_iter())?
         } else {
@@ -300,6 +300,9 @@ impl EcommerceApp {
     }
 
     fn build_progress_ui(&self) -> Result<ProgressUI, SimErrorAny> {
+        if !self.cli()?.quiet() {
+            panic!("ProgressUI cannot be built in quiet mode");
+        }
         Ok(ProgressUI::builder().quiet(self.cli()?.quiet()).build()?)
     }
 
@@ -849,8 +852,22 @@ impl EcommerceApp {
     }
 
     pub async fn execute(&self) -> Result<(), SimErrorAny> {
+        let cli = match self.cli() {
+            Ok(cli) => cli,
+            Err(err) => match err.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    let mut cmd = Cli::command();
+                    // let mut cmd = cmd.color(clap::ColorChoice::Always);
+                    cmd.print_help().unwrap();
+                    return Ok(());
+                }
+                _ => {
+                    return Err(err.into());
+                }
+            },
+        };
+
         self.validate()?;
-        let cli = self.cli()?;
 
         #[cfg(feature = "tracing")]
         self.setup_tracing()?;
@@ -919,5 +936,20 @@ impl SimulationApp for EcommerceApp {
 
     fn report_error<S: ToString>(&self, msg: S) {
         self.progress_ui().unwrap().report_error(msg.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parsing() {
+        let args = vec!["cmd", "--quiet", "--test", "--products", "5", "--period", "30"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse CLI arguments");
+        assert_eq!(cli.products(), 5);
+        assert_eq!(cli.period(), 30);
+        assert!(cli.quiet());
+        assert!(cli.test());
     }
 }
