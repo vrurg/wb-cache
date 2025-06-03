@@ -69,7 +69,7 @@ pub trait DBProvider: Sync + Send + 'static {
 ///
 /// | Parameter | Description |
 /// |-----------|-------------|
-/// | `T`       | The SeaORM `Entity` type that this data controller is responsible for. It must implement the [`EntityTrait`](sea_orm::entity::EntityTrait) trait.
+/// | `T`       | The SeaORM `Entity` type that this data controller is responsible for. It must implement the [`EntityTrait`] trait.
 /// | `PARENT`  | The data controller implementing `DCCommon` is expected to be a child of an entity that implements the [`DBProvider`] trait, thereby providing a database connection.
 /// | `IMMUTABLE` | Setting this to `true` indicates that the database does not modify records when they are written to it; in particular, the primary key is configured with auto-increment disabled.
 #[async_trait]
