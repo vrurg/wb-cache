@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::thread;
 
 use crossbeam::queue::SegQueue;
@@ -19,6 +18,7 @@ use crate::test::simulation::types::SimErrorAny;
 use super::entity::customer::Customer;
 use super::math::bisect;
 use super::reporter::Reporter;
+use super::reporter::SwReporter;
 use super::ScriptWriter;
 
 #[fx_plus(
@@ -86,7 +86,7 @@ pub struct RndPool {
     erratic_quotient_gamma: Gamma<f64>,
 
     #[fieldx(lazy)]
-    reporter: Arc<Reporter>,
+    reporter: Reporter,
 
     #[fieldx(lock, private, get(copy), set, builder(off))]
     shutdown: bool,
@@ -172,7 +172,7 @@ impl RndPool {
         .unwrap()
     }
 
-    fn build_reporter(&self) -> Arc<Reporter> {
+    fn build_reporter(&self) -> Reporter {
         self.parent().unwrap().reporter().clone()
     }
 
@@ -200,7 +200,7 @@ impl RndPool {
             .set_rnd_pool_task_status(super::reporter::TaskStatus::Busy);
 
         if self.randoms().is_empty() {
-            let _ = self.reporter().out(format!(
+            let _ = self.reporter().out(&format!(
                 "Doubling randoms pool size from {}/{}",
                 self.randoms_min(),
                 self.randoms_full()
@@ -210,7 +210,7 @@ impl RndPool {
         }
 
         if self.customers().is_empty() {
-            let _ = self.reporter().out(format!(
+            let _ = self.reporter().out(&format!(
                 "Doubling customers pool size from {}/{}",
                 self.customers_min(),
                 self.customers_full()

@@ -58,11 +58,16 @@ const INNER_ZIP_NAME: &str = "__script.postcard";
 #[derive(Debug, Clone, clap::Parser, Validate)]
 #[fxstruct(no_new, get(copy))]
 #[clap(about, version, author, name = "company")]
-struct Cli {
+pub(crate) struct Cli {
     /// File name of the script.
     #[fieldx(get(clone))]
     #[garde(skip)]
     script: Option<PathBuf>,
+
+    /// Silence the output
+    #[clap(long, short, default_value_t = false)]
+    #[garde(skip)]
+    quiet: bool,
 
     /// Simulation period in "days".
     #[clap(long, default_value_t = 365)]
@@ -233,9 +238,20 @@ impl Cli {
     }
 }
 
-#[fx_plus(app, rc, new(private), sync, get, fallible(off, error(SimErrorAny)))]
+#[fx_plus(
+    app,
+    rc,
+    new(private),
+    sync,
+    get,
+    fallible(off, error(SimErrorAny)),
+    builder(vis(pub))
+)]
 pub struct EcommerceApp {
-    #[fieldx(lazy, private, fallible, get(clone), default(Cli::parse()))]
+    #[fieldx(inner_mut, clearer, builder("_cli_args"))]
+    cli_args: Vec<String>,
+
+    #[fieldx(lazy, private, fallible, get(clone))]
     cli: Cli,
 
     #[fieldx(lazy, get, clearer, fallible)]
@@ -256,12 +272,17 @@ pub struct EcommerceApp {
 
 impl EcommerceApp {
     fn build_cli(&self) -> Result<Cli, SimErrorAny> {
-        self.cli()
+        Ok(if let Some(custom_args) = self.clear_cli_args() {
+            Cli::try_parse_from(custom_args.into_iter())?
+        } else {
+            Cli::try_parse()?
+        })
     }
 
     fn build_script_writer(&self) -> Result<Arc<ScriptWriter>> {
         let cli = self.cli()?;
         Ok(ScriptWriter::builder()
+            .quiet(cli.quiet())
             .period(cli.period() as i32)
             .product_count(cli.products() as i32)
             .initial_customers(cli.initial_customers())
@@ -279,7 +300,7 @@ impl EcommerceApp {
     }
 
     fn build_progress_ui(&self) -> Result<ProgressUI, SimErrorAny> {
-        Ok(ProgressUI::builder().build()?)
+        Ok(ProgressUI::builder().quiet(self.cli()?.quiet()).build()?)
     }
 
     fn validate(&self) -> Result<(), SimErrorAny> {
@@ -827,27 +848,37 @@ impl EcommerceApp {
         Ok(())
     }
 
-    pub async fn run() -> Result<(), SimErrorAny> {
-        let app = EcommerceApp::__fieldx_new();
-        app.validate()?;
-        let cli = app.cli()?;
+    pub async fn execute(&self) -> Result<(), SimErrorAny> {
+        self.validate()?;
+        let cli = self.cli()?;
 
         #[cfg(feature = "tracing")]
-        app.setup_tracing()?;
+        self.setup_tracing()?;
 
         if cli.save() {
-            return tokio::task::spawn_blocking(move || app.save_script()).await?;
+            let myself = self.myself().unwrap();
+            return tokio::task::spawn_blocking(move || myself.save_script()).await?;
         }
 
         let script = if cli.load() {
-            app.load_script()?
+            self.load_script()?
         } else {
-            let s = app.script_writer()?.create()?;
-            app.clear_script_writer();
+            let s = self.script_writer()?.create()?;
+            self.clear_script_writer();
             s
         };
 
-        app.execute_per_db(script).await
+        self.execute_per_db(script).await
+    }
+
+    pub async fn run() -> Result<(), SimErrorAny> {
+        EcommerceApp::__fieldx_new().execute().await
+    }
+}
+
+impl EcommerceAppBuilder {
+    pub fn cli_args<S: ToString>(self, args: Vec<S>) -> Self {
+        self._cli_args(args.into_iter().map(|s| s.to_string()).collect())
     }
 }
 
@@ -877,12 +908,15 @@ impl SimulationApp for EcommerceApp {
     fn report_info<S: ToString>(&self, msg: S) {
         self.progress_ui().unwrap().report_info(msg.to_string());
     }
+
     fn report_debug<S: ToString>(&self, msg: S) {
         self.progress_ui().unwrap().report_debug(msg.to_string());
     }
+
     fn report_warn<S: ToString>(&self, msg: S) {
         self.progress_ui().unwrap().report_warn(msg.to_string());
     }
+
     fn report_error<S: ToString>(&self, msg: S) {
         self.progress_ui().unwrap().report_error(msg.to_string());
     }

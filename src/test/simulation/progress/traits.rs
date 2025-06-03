@@ -50,16 +50,12 @@ impl MaybeProgress for Option<ProgressBar> {
     fn maybe_set_message(&self, msg: impl Into<Cow<'static, str>>) {
         if let Some(pb) = self {
             pb.set_message(msg);
-        } else {
-            println!("{}", msg.into());
         }
     }
 
     fn maybe_set_prefix(&self, prefix: impl Into<Cow<'static, str>>) {
         if let Some(pb) = self {
             pb.set_prefix(prefix);
-        } else {
-            println!("{}", prefix.into());
         }
     }
 

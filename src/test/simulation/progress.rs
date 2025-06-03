@@ -75,6 +75,9 @@ impl ProgressTracker for PerSecFmt {
 
 #[fxstruct(new(off), sync, fallible(off, error(SimError)), builder)]
 pub struct ProgressUI {
+    #[fieldx(get(copy), default(false))]
+    quiet: bool,
+
     #[fieldx(lazy, get, builder(off))]
     multi_progress: Option<MultiProgress>,
 
@@ -93,7 +96,7 @@ pub struct ProgressUI {
 
 impl ProgressUI {
     fn build_user_attended(&self) -> bool {
-        console::user_attended()
+        !self.quiet && console::user_attended()
     }
 
     fn build_multi_progress(&self) -> Option<MultiProgress> {
@@ -138,6 +141,10 @@ impl ProgressUI {
     }
 
     fn _println(&self, msg_type: MsgType, msg: String) {
+        if self.quiet {
+            return;
+        }
+
         let prefix = self.message_style(msg_type).apply_to(format!("[{msg_type}]"));
         if matches!(msg_type, MsgType::Info) {
             println!("{prefix} {msg}");

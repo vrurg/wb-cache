@@ -1,6 +1,6 @@
 use std::cell::RefCell;
-use std::fmt::Display;
 use std::sync::atomic::AtomicI32;
+use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -27,6 +27,99 @@ use crate::test::simulation::types::SimErrorAny;
 use super::ScriptWriter;
 
 const TICKER_CHARS: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+// ScriptWriter reporter trait
+pub trait SwReporter: Send + Sync + 'static {
+    fn out(&self, msg: &str) -> Result<()>;
+    fn refresh_report(&self) -> Result<()>;
+    fn set_backorders(&self, backorders: usize);
+    fn set_pending_orders(&self, orders: usize);
+    fn set_rnd_pool_task_status(&self, status: TaskStatus);
+    fn set_scenario_capacity(&self, capacity: usize);
+    fn set_scenario_lines(&self, lines: usize);
+    fn set_task_count(&self, count: usize);
+    fn set_task_status(&self, task_id: usize, status: TaskStatus);
+    fn start(&self) -> Result<()>;
+    fn stop(&self) -> Result<()>;
+}
+
+#[derive(Clone)]
+pub enum Reporter {
+    Formatted(Arc<FormattedReporter>),
+    Quiet,
+}
+
+impl SwReporter for Reporter {
+    fn out(&self, msg: &str) -> Result<()> {
+        match self {
+            Reporter::Formatted(reporter) => reporter.out(msg),
+            Reporter::Quiet => Ok(()),
+        }
+    }
+
+    fn refresh_report(&self) -> Result<()> {
+        match self {
+            Reporter::Formatted(reporter) => reporter.refresh_report(),
+            Reporter::Quiet => Ok(()),
+        }
+    }
+
+    fn set_backorders(&self, backorders: usize) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_backorders(backorders);
+        }
+    }
+
+    fn set_pending_orders(&self, orders: usize) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_pending_orders(orders);
+        }
+    }
+
+    fn set_rnd_pool_task_status(&self, status: TaskStatus) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_rnd_pool_task_status(status);
+        }
+    }
+
+    fn set_scenario_capacity(&self, capacity: usize) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_scenario_capacity(capacity);
+        }
+    }
+
+    fn set_scenario_lines(&self, lines: usize) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_scenario_lines(lines);
+        }
+    }
+
+    fn set_task_count(&self, count: usize) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_task_count(count);
+        }
+    }
+
+    fn set_task_status(&self, task_id: usize, status: TaskStatus) {
+        if let Reporter::Formatted(reporter) = self {
+            reporter.set_task_status(task_id, status);
+        }
+    }
+
+    fn start(&self) -> Result<()> {
+        match self {
+            Reporter::Formatted(reporter) => reporter.start(),
+            Reporter::Quiet => Ok(()),
+        }
+    }
+
+    fn stop(&self) -> Result<()> {
+        match self {
+            Reporter::Formatted(reporter) => reporter.stop(),
+            Reporter::Quiet => Ok(()),
+        }
+    }
+}
 
 enum NumFormatter {
     Sys(Box<SystemLocale>),
@@ -107,7 +200,7 @@ pub enum TaskStatus {
 }
 
 #[fx_plus(child(ScriptWriter, unwrap(or_else(SimErrorAny, no_scenario))), sync, rc)]
-pub struct Reporter {
+pub struct FormattedReporter {
     #[fieldx(private, lock, get, get_mut, builder(off), default(Vec::new()))]
     task_status: Vec<TaskStatus>,
 
@@ -123,16 +216,16 @@ pub struct Reporter {
     #[fieldx(private, lock, set, get(copy), builder(off))]
     shutdown: bool,
 
-    #[fieldx(lock, set, get(copy), builder(off), default(0))]
+    #[fieldx(lock, set("_set_scenario_lines"), get(copy), builder(off), default(0))]
     scenario_lines: usize,
 
-    #[fieldx(lock, set, get(copy), builder(off), default(0))]
+    #[fieldx(lock, set("_set_scenario_capacity"), get(copy), builder(off), default(0))]
     scenario_capacity: usize,
 
-    #[fieldx(lock, set, get(copy), builder(off), default(0))]
+    #[fieldx(lock, set("_set_pending_orders"), get(copy), builder(off), default(0))]
     pending_orders: usize,
 
-    #[fieldx(lock, set, get(copy), builder(off), default(0))]
+    #[fieldx(lock, set("_set_backorders"), get(copy), builder(off), default(0))]
     backorders: usize,
 
     #[fieldx(lazy, get_mut, private, builder(off))]
@@ -154,10 +247,10 @@ pub struct Reporter {
     task_changes: AtomicI32,
 
     #[fieldx(lock, set, get, get_mut, builder(off), default(Vec::new()))]
-    messages: Vec<Box<dyn Display + Send + Sync + 'static>>,
+    messages: Vec<String>,
 }
 
-impl Reporter {
+impl FormattedReporter {
     fn build_term(&self) -> Term {
         Term::buffered_stdout()
     }
@@ -170,56 +263,20 @@ impl Reporter {
         simerr!("Scenario object is gone!")
     }
 
-    pub fn start(&self) -> Result<()> {
-        self.term().clear_screen().unwrap();
-        self.term().hide_cursor().unwrap();
-        self.set_shutdown(false);
-        if self.user_attended() {
-            let myself = self
-                .myself()
-                .ok_or(simerr!("Failed to get myself for reporter object"))?;
-            self.set_refresher_handler(
-                thread::Builder::new()
-                    .name("refresher".to_string())
-                    .spawn(move || myself.refresher())?,
-            );
-        }
-
-        Ok(())
-    }
-
-    pub fn stop(&self) -> Result<()> {
-        self.set_shutdown(true);
-        if let Some(handle) = self.clear_refresher_handler() {
-            if let Err(err) = handle.join() {
-                eprintln!("Screen updater thread failed: {err:?}");
-            }
-        }
-        self.term().show_cursor().unwrap();
-        Ok(())
-    }
-
-    pub fn format_num<N: ToFormattedString>(&self, num: N) -> String {
-        NUM_LOCALE.with_borrow(|l| num.to_formatted_string(l))
-    }
-
     fn status_report(&self) -> Result<Vec<String>> {
         let scenario = self.parent()?;
         let mut status_lines = Vec::new();
         status_lines.push(format!("Day            {:>11}", scenario.current_day()));
-        status_lines.push(format!(
-            "Customers      {:>11}",
-            self.format_num(scenario.customers().len())
-        ));
+        status_lines.push(format!("Customers      {:>11}", format_num(scenario.customers().len())));
         status_lines.push(format!(
             "Pending orders {:>11} | Backordered {:>11}",
-            self.format_num(self.pending_orders()),
-            self.format_num(self.backorders())
+            format_num(self.pending_orders()),
+            format_num(self.backorders())
         ));
         status_lines.push(format!(
             "Scenario lines {:>11} | Capacity {:>11} ({}%)",
-            self.format_num(self.scenario_lines()),
-            self.format_num(self.scenario_capacity()),
+            format_num(self.scenario_lines()),
+            format_num(self.scenario_capacity()),
             (self.scenario_lines() as f64 / self.scenario_capacity() as f64 * 100.0).round()
         ));
         Ok(status_lines)
@@ -244,7 +301,115 @@ impl Reporter {
         Ok(())
     }
 
-    pub fn refresh_report(&self) -> Result<()> {
+    fn refresher(&self) -> Result<()> {
+        let interval = self.refresh_interval();
+        let mut next_interval = interval;
+        loop {
+            if self.shutdown() {
+                break;
+            }
+            self.refresher_count_mut()
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            thread::sleep(next_interval);
+            let duration = self.last_refresh().elapsed();
+            if duration >= interval {
+                self.refresh_report()?;
+                next_interval = interval;
+            } else {
+                // If a refresh took place while we slept then sleep the remaining time to make it a full interval.
+                next_interval = interval - duration;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn refresh_task_status(&self) {
+        let statuses = self.task_status();
+        let task_box_busy = style("■").on_black();
+        let task_box_idle = style("□").on_black();
+        let r_idx = self.refresher_count().load(std::sync::atomic::Ordering::Relaxed) as usize % TICKER_CHARS.len();
+        let task_rotator = style(format!("{} ", TICKER_CHARS[r_idx])).cyan().dim();
+        let task_changes = format_num(self.task_changes().load(std::sync::atomic::Ordering::Relaxed));
+        let rnd_pool_status = match self.rnd_pool_task() {
+            TaskStatus::Idle => task_box_idle.clone().white().dim(),
+            TaskStatus::Busy => task_box_busy.clone().magenta().bright(),
+        };
+        self.set_task_line(format!(
+            "{}Workers [{}{}] State transitions: {}",
+            task_rotator,
+            rnd_pool_status,
+            statuses
+                .iter()
+                .map(|s| {
+                    let tb = match s {
+                        TaskStatus::Idle => task_box_idle.clone().cyan().dim(),
+                        TaskStatus::Busy => task_box_busy.clone().yellow(),
+                    };
+                    tb.to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+            task_changes
+        ));
+    }
+}
+
+impl SwReporter for FormattedReporter {
+    fn start(&self) -> Result<()> {
+        self.term().clear_screen().unwrap();
+        self.term().hide_cursor().unwrap();
+        self.set_shutdown(false);
+        if self.user_attended() {
+            let myself = self
+                .myself()
+                .ok_or(simerr!("Failed to get myself for reporter object"))?;
+            self.set_refresher_handler(
+                thread::Builder::new()
+                    .name("refresher".to_string())
+                    .spawn(move || myself.refresher())?,
+            );
+        }
+
+        Ok(())
+    }
+
+    fn stop(&self) -> Result<()> {
+        self.set_shutdown(true);
+        if let Some(handle) = self.clear_refresher_handler() {
+            if let Err(err) = handle.join() {
+                eprintln!("Screen updater thread failed: {err:?}");
+            }
+        }
+        self.term().show_cursor().unwrap();
+        Ok(())
+    }
+
+    fn out(&self, msg: &str) -> Result<()> {
+        self.messages_mut().push(msg.to_string());
+        if !self.user_attended() && self.messages().len() > 20 {
+            self.spurt_messages(&self.term(), 0)?;
+        }
+        Ok(())
+    }
+
+    fn set_task_count(&self, count: usize) {
+        self.task_status_mut().resize(count, TaskStatus::Idle);
+    }
+
+    fn set_task_status(&self, task_id: usize, status: TaskStatus) {
+        self.task_changes_mut()
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if task_id < self.task_status().len() {
+            self.task_status_mut()[task_id] = status;
+        }
+    }
+
+    fn set_rnd_pool_task_status(&self, status: TaskStatus) {
+        *self.rnd_pool_task_mut() = status;
+    }
+
+    fn refresh_report(&self) -> Result<()> {
         let mut status_lines = self.status_report()?;
         let (t_height, t_width) = self.term().size();
         status_lines.push(style("─".repeat(t_width as usize)).cyan().dim().to_string());
@@ -278,80 +443,23 @@ impl Reporter {
         Ok(())
     }
 
-    fn refresher(&self) -> Result<()> {
-        let interval = self.refresh_interval();
-        let mut next_interval = interval;
-        loop {
-            if self.shutdown() {
-                break;
-            }
-            self.refresher_count_mut()
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            thread::sleep(next_interval);
-            let duration = self.last_refresh().elapsed();
-            if duration >= interval {
-                self.refresh_report()?;
-                next_interval = interval;
-            } else {
-                // If a refresh took place while we slept then sleep the remaining time to make it a full interval.
-                next_interval = interval - duration;
-            }
-        }
-
-        Ok(())
+    fn set_scenario_lines(&self, lines: usize) {
+        self._set_scenario_lines(lines);
     }
 
-    pub fn set_task_count(&self, count: usize) {
-        self.task_status_mut().resize(count, TaskStatus::Idle);
+    fn set_scenario_capacity(&self, capacity: usize) {
+        self._set_scenario_capacity(capacity);
     }
 
-    pub fn set_task_status(&self, task_id: usize, status: TaskStatus) {
-        self.task_changes_mut()
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if task_id < self.task_status().len() {
-            self.task_status_mut()[task_id] = status;
-        }
+    fn set_backorders(&self, backorders: usize) {
+        self._set_backorders(backorders);
     }
 
-    pub fn set_rnd_pool_task_status(&self, status: TaskStatus) {
-        *self.rnd_pool_task_mut() = status;
+    fn set_pending_orders(&self, orders: usize) {
+        self._set_pending_orders(orders);
     }
+}
 
-    fn refresh_task_status(&self) {
-        let statuses = self.task_status();
-        let task_box_busy = style("■").on_black();
-        let task_box_idle = style("□").on_black();
-        let r_idx = self.refresher_count().load(std::sync::atomic::Ordering::Relaxed) as usize % TICKER_CHARS.len();
-        let task_rotator = style(format!("{} ", TICKER_CHARS[r_idx])).cyan().dim();
-        let task_changes = self.format_num(self.task_changes().load(std::sync::atomic::Ordering::Relaxed));
-        let rnd_pool_status = match self.rnd_pool_task() {
-            TaskStatus::Idle => task_box_idle.clone().white().dim(),
-            TaskStatus::Busy => task_box_busy.clone().magenta().bright(),
-        };
-        self.set_task_line(format!(
-            "{}Workers [{}{}] State transitions: {}",
-            task_rotator,
-            rnd_pool_status,
-            statuses
-                .iter()
-                .map(|s| {
-                    let tb = match s {
-                        TaskStatus::Idle => task_box_idle.clone().cyan().dim(),
-                        TaskStatus::Busy => task_box_busy.clone().yellow(),
-                    };
-                    tb.to_string()
-                })
-                .collect::<Vec<_>>()
-                .join(""),
-            task_changes
-        ));
-    }
-
-    pub fn out<T: Display + Send + Sync + 'static>(&self, msg: T) -> Result<()> {
-        self.messages_mut().push(Box::new(msg));
-        if !self.user_attended() && self.messages().len() > 20 {
-            self.spurt_messages(&self.term(), 0)?;
-        }
-        Ok(())
-    }
+fn format_num<N: ToFormattedString>(num: N) -> String {
+    NUM_LOCALE.with_borrow(|l| num.to_formatted_string(l))
 }

@@ -35,7 +35,9 @@ use rand_distr::Distribution;
 use rand_distr::Geometric;
 use rand_distr::Normal;
 use rand_distr::Poisson;
+use reporter::FormattedReporter;
 use reporter::Reporter;
+use reporter::SwReporter;
 use reporter::TaskStatus;
 use rnd_pool::RndPool;
 use sea_orm::prelude::Uuid;
@@ -108,6 +110,9 @@ impl TaskResult {
 /// Generate a scenario to be executed by the Company simulator.
 #[fx_plus(parent, sync, rc, builder(post_build, opt_in))]
 pub struct ScriptWriter {
+    /// Supress all output.
+    #[fieldx(get(copy), builder)]
+    quiet: bool,
     /// For how many days the scenario will run.
     #[fieldx(default(365), builder)]
     period: i32,
@@ -220,7 +225,7 @@ pub struct ScriptWriter {
     task_handlers: Vec<std::thread::JoinHandle<usize>>,
 
     #[fieldx(lazy, private, get, builder(off))]
-    reporter: Arc<Reporter>,
+    reporter: Reporter,
 
     #[fieldx(lock, clearer, get(copy), set, builder(off))]
     track_product: usize,
@@ -409,7 +414,7 @@ impl ScriptWriter {
             }
 
             if batch_steps.capacity() > init_capacity {
-                self.reporter().out(format!(
+                self.reporter().out(&format!(
                     "Thread {}: Purchase task steps capacity increased from {} to {} (expected steps: {}, total steps: {}, batch steps: {})",
                     thread_id,
                     init_capacity,
@@ -554,7 +559,7 @@ impl ScriptWriter {
             let product_id = bo[0].0;
             self.set_track_product(product_id);
             let product = &self.products()[product_id];
-            reporter.out(format!(
+            reporter.out(&format!(
                 "Top backordered product {}: {} orders:\n  Daily quotient: {:.2}, daily estimate: {:.2}, expected return rate: {:.2}\n  Stock supplies in: {:.2}, supplier inaccuracy: {:.2}, supplier tardiness: {:.2}",
                 product.id(),
                 bo[0].1.len(),
@@ -854,7 +859,7 @@ impl ScriptWriter {
 
             if let Some(tracked_product) = self.track_product() {
                 if tracked_product == product_id as usize {
-                    self.reporter().out(format!(
+                    self.reporter().out(&format!(
                         "Product {}: being shipped: {}, estimate sales: {}, inventory: {}",
                         product_id,
                         being_shipped,
@@ -896,7 +901,7 @@ impl ScriptWriter {
 
                 if let Some(tracked_product) = self.track_product() {
                     if tracked_product == product_id as usize {
-                        self.reporter().out(format!(
+                        self.reporter().out(&format!(
                             "Order shipment for product {}: {} units, arrives in {} days",
                             product_id,
                             shipment.batch_size(),
@@ -963,7 +968,7 @@ impl ScriptWriter {
 
                 if let Some(tracked_product) = self.track_product() {
                     if tracked_product == product_id {
-                        self.reporter().out(format!(
+                        self.reporter().out(&format!(
                             "Arrived shipment for product {product_id}: {batch_size} units, new stock: {new_stock}",
                         ))?;
                     }
@@ -1116,8 +1121,12 @@ impl ScriptWriter {
         let mut succeed = true;
         for tr in task_results {
             if let Err(err) = tr.wait() {
-                self.reporter()
-                    .out(style(format!("Failed to process task: {err}")).red().bright())?;
+                self.reporter().out(
+                    &style(format!("Failed to process task: {err}"))
+                        .red()
+                        .bright()
+                        .to_string(),
+                )?;
                 succeed = false;
             }
         }
@@ -1137,7 +1146,7 @@ impl ScriptWriter {
 
     #[allow(unused)]
     fn report<S: Display>(&self, msg: S) -> Result<()> {
-        self.reporter().out(msg.to_string())
+        self.reporter().out(&msg.to_string())
     }
 
     fn order_by_idx(&self, idx: usize) -> Result<DbOrder> {
@@ -1204,8 +1213,12 @@ impl ScriptWriter {
         tx
     }
 
-    fn build_reporter(&self) -> Arc<Reporter> {
-        child_build!(self, Reporter).unwrap()
+    fn build_reporter(&self) -> Reporter {
+        if self.quiet() {
+            Reporter::Quiet
+        } else {
+            Reporter::Formatted(child_build!(self, FormattedReporter).unwrap())
+        }
     }
 
     fn build_random_pool(&self) -> Arc<RndPool> {
