@@ -300,9 +300,6 @@ impl EcommerceApp {
     }
 
     fn build_progress_ui(&self) -> Result<ProgressUI, SimErrorAny> {
-        if !self.cli()?.quiet() {
-            panic!("ProgressUI cannot be built in quiet mode");
-        }
         Ok(ProgressUI::builder().quiet(self.cli()?.quiet()).build()?)
     }
 
