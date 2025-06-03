@@ -59,6 +59,12 @@
     tracing-subscriber                 = { version = "0.3", optional = true, features = ["env-filter", "fmt", "local-time", "std"] }
     zip                                = { version = "4.0", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+    winapi = { version = "*", features = ["errhandlingapi"] }
+
+[dev-dependencies]
+    wb-cache = { path = ".", features = ["simulation"] }
+
 [features]
     default = []
     log = ["log/max_level_trace"]
@@ -112,15 +118,9 @@
         "dep:tracing-opentelemetry",
     ]
 
-[dev-dependencies]
-    wb-cache = { path = ".", features = ["simulation"] }
-
 [badges]
     github = { repository = "vrurg/fieldx_plus" }
 
 [package.metadata.docs.rs]
     all-features = true
     rustdoc-args = ["-Dwarnings"]
-
-[target.'cfg(windows)'.dependencies]
-    winapi = { version = "0.3", features = ["errhandlingapi"] }
