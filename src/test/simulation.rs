@@ -62,13 +62,13 @@
 //!
 //! To run the simulation, execute one of the following commands:
 //!
-//! ```
+//! ```shell
 //! cargo run --profile release --feature sqlite --example company -- --sqlite --test
 //! ```
 //!
 //! or
 //!
-//! ```
+//! ```shell
 //! cargo run --profile release --features pg --example company -- --pg --test
 //! ```
 //!
@@ -77,13 +77,13 @@
 //! Running with the PostgreSQL driver requires connection parameters to be provided. This can be done either via the
 //! command line or environment variables. To see the available options, run:
 //!
-//! ```
+//! ```shell
 //! cargo run --features pg --example company -- --help
 //! ```
 //!
 //! or, to get full help:
 //!
-//! ```
+//! ```shell
 //! cargo run --all-features --example company -- --help
 //! ```
 pub mod actor;
