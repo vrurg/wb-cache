@@ -779,7 +779,6 @@ where
                 }
                 _ = cleanup_notifier.notified() => {
                     // The cleanup was requested manually. Reset the timer.
-                    *closed_guard = true;
                     forced = true;
                 }
                 _ = ticking_interval.tick() => {
@@ -787,14 +786,20 @@ where
                 }
             }
 
+            *closed_guard = self.is_shut_down();
+
             if self.updates().is_empty() {
                 // Don't consume resources if no updates have been produced.
                 continue;
             }
 
-            if forced || self.updates().len() > max_updates || self.last_flush().elapsed() >= flush_interval {
+            if forced
+                || *closed_guard
+                // When the updates pool size exceeded the limit
+                || self.updates().len() > max_updates
                 // When last flush took place earlier than the flush interval ago...
-                debug!("[{}] DO flush() (forced: {forced})", self.name());
+                || self.last_flush().elapsed() >= flush_interval
+            {
                 if let Err(error) = self.flush().await {
                     self.set_error(error.clone());
                     wbc_event!(self, on_monitor_error(&error));
@@ -805,12 +810,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn check_task(&self) {
-        if self.is_shut_down() {
-            return;
-        }
-
         let mut task_guard = self.write_monitor_task();
-        if task_guard.as_ref().map_or(true, |t| t.is_finished()) {
+        if task_guard.as_ref().is_none_or(|t| t.is_finished()) {
             let async_self = self.myself().unwrap();
             *task_guard = Some(tokio::spawn(async move { async_self.monitor_updates().await }));
         }
