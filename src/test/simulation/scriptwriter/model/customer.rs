@@ -86,6 +86,7 @@ mod test {
             .market_capacity(1_000_000.)
             .inflection_point(200_000.)
             .tolerance(0.0001)
+            .growth_rate(0.05)
             .build()
             .unwrap();
         let v = richards.v();
