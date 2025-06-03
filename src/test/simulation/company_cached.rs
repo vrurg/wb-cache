@@ -104,7 +104,7 @@ where
         self.parent()
             .app()
             .unwrap()
-            .report_error(format!("OrderObserver::on_monitor_error: {:?}", error));
+            .report_error(format!("OrderObserver::on_monitor_error: {error:?}"));
     }
 
     async fn on_debug(&self, message: &str) {
@@ -183,7 +183,7 @@ where
         self.parent()
             .app()
             .unwrap()
-            .report_error(format!("SessionObserver::on_monitor_error: {:?}", error));
+            .report_error(format!("SessionObserver::on_monitor_error: {error:?}"));
     }
 
     async fn on_debug(&self, message: &str) {
@@ -484,7 +484,8 @@ where
                     }
                     inventory_record.stock = new_stock;
                     Ok(cache::Op::Put(inventory_record))
-                } else {
+                }
+                else {
                     Err(simerr!(
                         "Can't update non-existing inventory record for product ID: {}",
                         product_id
@@ -511,7 +512,8 @@ where
                     let mut order: Order = entry.into_value();
                     order.status = order_update.status;
                     Ok(cache::Op::Put(order))
-                } else {
+                }
+                else {
                     Err(simerr!("Can't update non-existing order for ID: {}", order_update.id))
                 }
             })
@@ -530,7 +532,8 @@ where
                     let mut product = entry.into_value();
                     product.views += 1;
                     Ok(cache::Op::Put(product))
-                } else {
+                }
+                else {
                     Err(simerr!("Can't update non-existing product for ID: {}", product_id))
                 }
             })
@@ -554,7 +557,8 @@ where
                     session.customer_id = session_update.customer_id;
                     session.expires_on = session_update.expires_on;
                     Ok(cache::Op::Put(session))
-                } else {
+                }
+                else {
                     Err(simerr!(
                         "Can't update non-existing session for ID: {}",
                         session_update.id
@@ -591,11 +595,13 @@ where
                         if session.expires_on <= self.current_day() {
                             // Session expired
                             Ok(cache::Op::Remove)
-                        } else {
+                        }
+                        else {
                             // Session is still valid, do nothing
                             Ok(cache::Op::Nop)
                         }
-                    } else {
+                    }
+                    else {
                         // If the session ID was found in the database but not in the cache, it indicates that it was
                         // previously deleted but hadn't been flushed yet.
                         // The scenario of a bug in the Cache implementation is not considered here.
