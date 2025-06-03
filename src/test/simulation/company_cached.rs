@@ -357,7 +357,7 @@ impl<APP: SimulationApp, D: DatabaseDriver> TestCompany<APP, D> {
 }
 
 #[async_trait]
-impl<APP, D> TestActor for TestCompany<APP, D>
+impl<APP, D> TestActor<APP> for TestCompany<APP, D>
 where
     APP: SimulationApp,
     D: DatabaseDriver,
@@ -470,7 +470,7 @@ where
         self.inv_rec_cache()?
             .entry(product_id)
             .await?
-            .and_try_compute_with(async |entry| {
+            .and_try_compute_with(|entry| async {
                 if let Some(entry) = entry {
                     let mut inventory_record = entry.into_value();
                     let new_stock = inventory_record.stock + quantity;
@@ -505,7 +505,7 @@ where
         self.order_cache()?
             .entry(order_update.id)
             .await?
-            .and_try_compute_with(async |entry| {
+            .and_try_compute_with(|entry| async {
                 if let Some(entry) = entry {
                     self.update_inventory(db, order_update).await?;
                     let mut order: Order = entry.into_value();
@@ -525,7 +525,7 @@ where
         self.product_cache()?
             .entry(product_id)
             .await?
-            .and_try_compute_with(async |entry| {
+            .and_try_compute_with(|entry| async {
                 if let Some(entry) = entry {
                     let mut product = entry.into_value();
                     product.views += 1;
@@ -548,7 +548,7 @@ where
         self.session_cache()?
             .entry(session_update.id)
             .await?
-            .and_try_compute_with(async |entry| {
+            .and_try_compute_with(|entry| async {
                 if let Some(entry) = entry {
                     let mut session = entry.into_value();
                     session.customer_id = session_update.customer_id;
@@ -585,7 +585,7 @@ where
             session_cache
                 .entry(session_id)
                 .await?
-                .and_try_compute_with(async |entry| {
+                .and_try_compute_with(|entry| async {
                     if let Some(entry) = entry {
                         let session = entry.into_value();
                         if session.expires_on <= self.current_day() {
@@ -616,6 +616,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn curtain_call(&self) -> Result<(), SimError> {
+        self.app()?.report_info("Shutting down caches...");
+
         self.customer_cache()?.close().await?;
         self.product_cache()?.close().await?;
         self.inv_rec_cache()?.close().await?;
