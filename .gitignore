@@ -5,3 +5,4 @@ __script.bin
 .vscode/launch.json
 .vscode/settings.json
 test_company_*.db
+.release-tested
