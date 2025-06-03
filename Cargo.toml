@@ -117,3 +117,7 @@
 
 [badges]
     github = { repository = "vrurg/fieldx_plus" }
+
+[package.metadata.docs.rs]
+    all-features = true
+    rustdoc-args = ["-Dwarnings"]
