@@ -119,7 +119,7 @@
     ]
 
 [badges]
-    github = { repository = "vrurg/fieldx_plus" }
+    github = { repository = "vrurg/wb-cache", workflow = "CI" }
 
 [package.metadata.docs.rs]
     all-features = true

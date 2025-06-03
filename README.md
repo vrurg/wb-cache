@@ -1,4 +1,4 @@
-[![Workflow Status](https://github.com/vrurg/fieldx_plus/workflows/main/badge.svg)](https://github.com/vrurg/fieldx_plus/actions?query=workflow%3A%22main%22)
+[![Workflow Status](https://github.com/vrurg/wb-cache/workflows/CI/badge.svg)](https://github.com/vrurg/wb-cache/actions?query=workflow%3A%22CI%22)
 [![License](https://img.shields.io/github/license/vrurg/wb-cache)](https://github.com/vrurg/wb-cache/blob/main/LICENSE)
 [![Crates.io Version](https://img.shields.io/crates/v/wb-cache)](https://crates.io/crates/wb-cache)
 
