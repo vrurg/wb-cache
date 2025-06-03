@@ -6,3 +6,4 @@ __script.bin
 .vscode/settings.json
 test_company_*.db
 .release-tested
+.release-notes.md
