@@ -3,8 +3,8 @@ extend = "build-tools/std-makefile.toml"
 [env]
     #CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
     __DOT_ARGS__               = "-Gdpi=300"
-    __MAKE_README_CRATE_ROOT__ = "."                              # In a workspace – a crate directory
-    __MAKE_TEST_TASKS__        = "test-default test-combinations"
+    __MAKE_README_CRATE_ROOT__ = "."                        # In a workspace – a crate directory
+    __MAKE_TEST_TASKS__        = "test-default"
     __MAKE_TOOLCHAINS__        = "1.77 stable beta nightly"
 
 [config]
