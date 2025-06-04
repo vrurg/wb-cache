@@ -34,10 +34,10 @@
     moka                               = { version = "0.12", features = ["future", "log"] }
     num-format                         = { version = "0.4", optional = true, features = ["with-system-locale"] }
     num_cpus                           = { version = "1.16", optional = true }
-    opentelemetry                      = { version = "*", optional = true, features = ["trace", "metrics"] }
-    opentelemetry-otlp                 = { version = "*", optional = true, features = ["metrics", "grpc-tonic"] }
-    opentelemetry-semantic-conventions = { version = "*", optional = true, features = ["semconv_experimental"] }
-    opentelemetry_sdk                  = { version = "*", optional = true, features = ["trace", "rt-tokio"] }
+    opentelemetry                      = { version = "0.30", optional = true, features = ["trace", "metrics"] }
+    opentelemetry-otlp                 = { version = "0.30", optional = true, features = ["metrics", "grpc-tonic"] }
+    opentelemetry-semantic-conventions = { version = "0.30", optional = true, features = ["semconv_experimental"] }
+    opentelemetry_sdk                  = { version = "0.30", optional = true, features = ["trace", "rt-tokio"] }
     parking_lot                        = { version = "0.12", features = ["send_guard"], optional = true }
     paste                              = { version = "1.0", optional = true }
     postcard                           = { version = "1.1", features = ["use-std"], optional = true }
@@ -61,7 +61,7 @@
     zip                                = { version = "4.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-    winapi = { version = "*", features = ["errhandlingapi"] }
+    winapi = { version = "0.3", features = ["errhandlingapi"] }
 
 [dev-dependencies]
     wb-cache = { path = ".", features = ["simulation"] }
