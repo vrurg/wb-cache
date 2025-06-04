@@ -1,6 +1,7 @@
 [package]
     authors       = ["Vadim Belman"]
     categories    = ["caching"]
+    description   = "Your L1 in-app write-behind cache for various kinds of backends."
     documentation = "https://docs.rs/wb-cache"
     edition       = "2021"
     exclude       = ["Makefile.toml", "release.toml"]
