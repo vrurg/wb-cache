@@ -7,3 +7,4 @@ __script.bin
 test_company_*.db
 .release-tested
 .release-notes.md
+wb-cache.code-workspace
