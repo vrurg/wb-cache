@@ -260,7 +260,7 @@ pub struct EcommerceApp {
     #[fieldx(lazy, private, fallible(error(clap::Error)), get(clone))]
     cli: Cli,
 
-    #[fieldx(lazy, get, clearer, fallible)]
+    #[fieldx(lazy, lock, get, clearer, fallible)]
     script_writer: Arc<ScriptWriter>,
 
     // This field is only used when either sqlite or pg features are enabled.

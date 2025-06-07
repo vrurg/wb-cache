@@ -171,7 +171,7 @@ pub struct ScriptWriter {
     #[fieldx(lock, get, get_mut)]
     backorders: Vec<VecDeque<usize>>,
 
-    #[fieldx(lazy, clearer, get(copy), default(0))]
+    #[fieldx(lazy, inner_mut, clearer, get(copy), default(0))]
     total_backordered: usize,
 
     /// Pending orders by their indices in the steps array, keyed by shipping day.
@@ -217,7 +217,7 @@ pub struct ScriptWriter {
     product_price_model: Arc<ProductModel>,
 
     // --- Workers pool related
-    #[fieldx(lazy, clearer, private, builder(off), get)]
+    #[fieldx(lazy, inner_mut, clearer, private, builder(off), get)]
     task_tx:       Sender<Task>,
     #[fieldx(lazy, private, builder(off), get(copy))]
     worker_count:  usize,
@@ -233,7 +233,7 @@ pub struct ScriptWriter {
     next_session_id: AtomicI64,
 
     // Base number to form session IDs. It has the format of <current_day> * 10^<number_of_digits_in_market_capacity>.
-    #[fieldx(lazy, private, clearer, get(copy), builder(off))]
+    #[fieldx(lazy, inner_mut, private, clearer, get(copy), builder(off))]
     session_base: i64,
 
     #[fieldx(lazy, inner_mut, get, get_mut, builder(off))]

@@ -228,7 +228,7 @@ pub struct FormattedReporter {
     #[fieldx(lock, set("_set_backorders"), get(copy), builder(off), default(0))]
     backorders: usize,
 
-    #[fieldx(lazy, get_mut, private, builder(off))]
+    #[fieldx(lazy, lock, get_mut, private, builder(off))]
     term: Term,
 
     #[fieldx(lazy, get(copy), builder(off))]
