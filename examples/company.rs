@@ -1,3 +1,6 @@
+#[cfg(not(feature = "simulation"))]
+compile_error!("The `simulation` feature must be enabled to use this example.");
+
 use wb_cache::test::simulation::sim_app::EcommerceApp;
 use wb_cache::test::simulation::types::Result;
 
