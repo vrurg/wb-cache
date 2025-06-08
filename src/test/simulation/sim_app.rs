@@ -480,7 +480,7 @@ impl EcommerceApp {
         let mut tasks = JoinSet::<Result<(&'static str, Duration), SimError>>::new();
 
         let myself = self.myself().unwrap();
-        tokio::spawn(async move {
+        let progress_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(100));
             loop {
                 interval.tick().await;
@@ -565,6 +565,8 @@ impl EcommerceApp {
             }
             self.report_info(format!("Tasks left: {}", tasks.len()));
         }
+
+        progress_task.abort();
 
         if all_success {
             let plain = outcomes.get("plain").unwrap();
