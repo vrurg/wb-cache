@@ -49,6 +49,10 @@ impl Pg {
 
 #[async_trait]
 impl DatabaseDriver for Pg {
+    fn name(&self) -> &'static str {
+        "PostgreSQL"
+    }
+
     fn connection(&self) -> DatabaseConnection {
         self.connection.read().clone()
     }

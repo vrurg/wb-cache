@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::io::BufWriter;
 use std::io::Read;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use std::time::Instant;
 use clap::error::ErrorKind;
 use clap::CommandFactory;
 use clap::Parser;
+use comfy_table::CellAlignment;
 use fieldx::fxstruct;
 use fieldx_plus::agent_build;
 use fieldx_plus::fx_plus;
@@ -472,6 +474,9 @@ impl EcommerceApp {
         db_cached: Arc<D>,
         screenplay: Arc<Vec<Step>>,
     ) -> Result<(), SimErrorAny> {
+        let driver_name = db_plain.name();
+        let cli = self.cli()?;
+
         let barrier = Arc::new(Barrier::new(2));
 
         let message_progress = self.progress_ui()?.acquire_progress(PStyle::Message, None);
@@ -571,20 +576,49 @@ impl EcommerceApp {
         if all_success {
             let plain = outcomes.get("plain").unwrap();
             let cached = outcomes.get("cached").unwrap();
-            self.report_info(format!("{:>11} | {:>11}", "plain", "cached"));
-            self.report_info(format!(
-                "{:>10.2}s | {:>10.2}s",
-                plain.as_secs_f64(),
-                cached.as_secs_f64()
-            ));
-            self.report_info(format!(
-                "{:>10.2}x | {:>10.2}x",
-                plain.as_secs_f64() / cached.as_secs_f64(),
-                1.0
-            ));
+
+            let mut table = comfy_table::Table::new();
+            table
+                .load_preset(comfy_table::presets::ASCII_FULL_CONDENSED)
+                .set_header(["", "Plain", "Cached"]);
+
+            table
+                .add_row([
+                    "Duration (s)".to_string(),
+                    format!("{:.2}", plain.as_secs_f64()),
+                    format!("{:.2}", cached.as_secs_f64()),
+                ])
+                .add_row([
+                    "Rate".to_string(),
+                    format!("{:.2}x", plain.as_secs_f64() / cached.as_secs_f64()),
+                    "1.00x".to_string(),
+                ]);
+
+            for col in 1..=2 {
+                if let Some(column) = table.column_mut(col) {
+                    column.set_cell_alignment(CellAlignment::Right);
+                }
+            }
+
+            let summary = format!(
+                "*** {} ***\nWith driver: {}\n{}\n",
+                chrono::Local::now(),
+                driver_name,
+                table
+            );
+
+            if let Some(stats_output) = cli.output() {
+                let mut file = BufWriter::new(std::fs::File::options().append(true).create(true).open(&stats_output)?);
+                write!(file, "\n{summary}")?;
+            }
+
+            let summary = summary.trim_end();
+            for summary_line in summary.lines() {
+                self.report_info(summary_line.to_string());
+            }
         }
 
-        if self.cli()?.test() {
+        if cli.test() {
             self.test_db(db_plain, db_cached).await?;
         }
 

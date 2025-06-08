@@ -14,6 +14,8 @@ use crate::test::simulation::types::Result;
 /// Trait for database [drivers](super::driver#modules) in the simulation environment.
 #[async_trait]
 pub trait DatabaseDriver: Debug + Sync + Send + 'static {
+    /// Return driver name.
+    fn name(&self) -> &'static str;
     /// Returns the database connection for the driver.
     fn connection(&self) -> DatabaseConnection;
     /// Configure the database connection parameters. See corresponding driver implementation for details.

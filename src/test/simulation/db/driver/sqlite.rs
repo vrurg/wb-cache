@@ -37,6 +37,10 @@ impl Sqlite {
 
 #[async_trait]
 impl DatabaseDriver for Sqlite {
+    fn name(&self) -> &'static str {
+        "SQLite"
+    }
+
     fn connection(&self) -> DatabaseConnection {
         self.connection.clone()
     }
