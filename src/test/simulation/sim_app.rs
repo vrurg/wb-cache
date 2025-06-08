@@ -62,80 +62,86 @@ pub(crate) struct Cli {
     /// File name of the script.
     #[fieldx(get(clone))]
     #[garde(skip)]
+    #[clap(env = "WBCACHE_SCRIPT_FILE")]
     script: Option<PathBuf>,
 
+    #[fieldx(get(clone))]
+    #[garde(skip)]
+    #[clap(long, short, env = "WBCACHE_OUTPUT")]
+    output: Option<PathBuf>,
+
     /// Silence the output
-    #[clap(long, short, default_value_t = false)]
+    #[clap(long, short, env = "WBCACHE_QUIET", default_value_t = false)]
     #[garde(skip)]
     quiet: bool,
 
     /// Simulation period in "days".
-    #[clap(long, default_value_t = 365)]
+    #[clap(long, env = "WBCACHE_PERIOD", default_value_t = 365)]
     #[garde(range(min = 1))]
     period: u32,
 
     /// Number of products to "offer"
-    #[clap(long, default_value_t = 10)]
+    #[clap(long, env = "WBCACHE_PRODUCTS", default_value_t = 10)]
     #[garde(range(min = 1))]
     products: u32,
 
     /// The number of customers we have on day 1.
-    #[clap(long, default_value_t = 1)]
+    #[clap(long, env = "WBCACHE_INITIAL_CUSTOMERS", default_value_t = 1)]
     #[garde(range(min = 1))]
     initial_customers: u32,
 
     /// The maximum number of customers the company can have.
-    #[clap(long, default_value_t = 1_000)]
+    #[clap(long, env = "WBCACHE_MARKET_CAPACITY", default_value_t = 1_000)]
     #[garde(range(min = 1))]
     market_capacity: u32,
 
     /// Where customer base growth reaches its peak.
-    #[clap(long, default_value_t = 400)]
+    #[clap(long, env = "WBCACHE_INFLECTION_POINT", default_value_t = 400)]
     #[garde(range(min = 1), custom(Self::less_than("market-capacity", &self.market_capacity)))]
     inflection_point: u32,
 
     /// Company's "success" rate – how fast the customer base grows
-    #[clap(long, default_value_t = 0.05)]
+    #[clap(long, env = "WBCACHE_GROWTH_RATE", default_value_t = 0.05)]
     #[garde(range(min = 0.0))]
     growth_rate: f32,
 
     /// Minimal number of orders per customer per day. Values below 1 indicate that a customer makes a purchase less
     /// than once a day.
-    #[clap(long, default_value_t = 0.15)]
+    #[clap(long, env = "WBCACHE_MIN_CUSTOMER_ORDERS", default_value_t = 0.15)]
     #[garde(range(min = 0.0), custom(Self::less_than("max-customer-orders", &self.max_customer_orders)))]
     min_customer_orders: f32,
 
     /// Maximum number of orders per customer per day. This is not a hard limit but an expectation that 90% of the
     /// customers will fall within this range.  The remaining 10% may exhibit less restrained behavior.
-    #[clap(long, default_value_t = 3.0)]
+    #[clap(long, env = "WBCACHE_MAX_CUSTOMER_ORDERS", default_value_t = 3.0)]
     #[garde(range(min = 0.0))]
     max_customer_orders: f32,
 
     /// The period of time we allow for a purchase to be returned.
-    #[clap(long, default_value_t = 30)]
+    #[clap(long, env = "WBCACHE_RETURN_WINDOW", default_value_t = 30)]
     #[garde(skip)]
     return_window: u32,
 
     /// Save the script to a file.
-    #[clap(long, short)]
+    #[clap(long, short, env = "WBCACHE_SAVE_SCRIPT", default_value_t = false)]
     #[garde(custom(Self::with_file(&self.script)))]
     save: bool,
 
     /// Load the script from a file.
-    #[clap(long, short)]
+    #[clap(long, short, env = "WBCACHE_LOAD_SCRIPT", default_value_t = false)]
     #[garde(custom(Self::with_file(&self.script)))]
     // This field is only used when either sqlite or pg features are enabled.
     #[fieldx(get(attributes_fn(allow(unused))))]
     load: bool,
 
     /// Test the results of the simulation by comparing two databases.
-    #[clap(long)]
+    #[clap(long, short, env = "WBCACHE_TEST", default_value_t = false)]
     #[garde(skip)]
     // This field is only used when either sqlite or pg features are enabled.
     #[fieldx(get(attributes_fn(allow(unused))))]
     test: bool,
 
-    #[cfg_attr(feature = "sqlite", clap(long))]
+    #[cfg_attr(feature = "sqlite", clap(long, env = "WBCACHE_SQLITE", default_value_t = false))]
     #[fieldx(get(copy, attributes_fn(cfg(feature = "sqlite"))))]
     #[cfg(feature = "sqlite")]
     #[garde(skip)]
@@ -150,7 +156,7 @@ pub(crate) struct Cli {
     #[garde(skip)]
     sqlite_path: Option<PathBuf>,
 
-    #[cfg_attr(feature = "pg", clap(long))]
+    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG", default_value_t = false))]
     #[fieldx(get(copy, attributes_fn(cfg(feature = "pg"))))]
     #[garde(skip)]
     #[cfg(feature = "pg")]
