@@ -74,6 +74,7 @@
         { message = "^refactor", group = "<!-- 2 --> Refactor" },
         { message = "^style", group = "<!-- 5 --> Styling" },
         { message = "^test", group = "<!-- 6 --> Testing" },
+        { message = "^sim(ulation)?", group = "<!-- 6 --> Simulation Code" },
         { message = '^[mM]aint(\(.*\))?', group = "<!-- 7 --> Maintenance" },
         { message = "^chore\\(release\\): prepare for", skip = true },
         { message = "^chore\\(deps.*\\)", skip = true },
