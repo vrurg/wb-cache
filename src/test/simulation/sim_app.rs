@@ -679,12 +679,18 @@ impl EcommerceApp {
     async fn execute_per_db(&self, script: Vec<Step>) -> Result<(), SimErrorAny> {
         let cli = self.cli()?;
         let script = Arc::new(script);
+        let mut performed = false;
+        let mut drivers = Vec::new();
 
         #[cfg(feature = "sqlite")]
         if cli.sqlite() {
             let db_plain = Sqlite::connect(&self.db_dir()?, "test_company_plan.db").await?;
             let db_cached = Sqlite::connect(&self.db_dir()?, "test_company_cached.db").await?;
+            performed = true;
             self.execute_script(db_plain, db_cached, script.clone()).await?;
+        }
+        else {
+            drivers.push("--sqlite");
         }
 
         #[cfg(feature = "pg")]
@@ -705,7 +711,25 @@ impl EcommerceApp {
                 .database(format!("{}_cached", cli.pg_db_prefix()))
                 .build()?;
             db_cached.connect().await?;
+            performed = true;
             self.execute_script(db_plain, db_cached, script.clone()).await?;
+        }
+        else {
+            drivers.push("--pg");
+        }
+
+        if !performed {
+            // `drivers`` can't be empty here because if neither DB feature is enabled, compilation will fail. If the
+            // code compiles, then at least one DB was attempted above, failed, and was pushed to the list.
+            if drivers.len() < 2 {
+                return Err(simerr!("No database driver selected. Use {} option.", drivers[0]));
+            }
+            else {
+                return Err(simerr!(
+                    "No database driver selected. Use one of {} to select a driver.",
+                    drivers.join(", ")
+                ));
+            }
         }
 
         Ok(())
