@@ -73,7 +73,7 @@ impl ProgressTracker for PerSecFmt {
     }
 }
 
-#[fxstruct(new(off), sync, fallible(off, error(SimError)), builder)]
+#[fxstruct(new(off), rc, sync, fallible(off, error(SimError)), builder)]
 pub struct ProgressUI {
     #[fieldx(get(copy), default(false))]
     quiet: bool,

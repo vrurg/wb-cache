@@ -10,7 +10,7 @@
     name          = "wb-cache"
     repository    = "https://github.com/vrurg/wb-cache.git"
     rust-version  = "1.82"
-    version       = "0.1.0"
+    version       = "0.1.1-beta.1"
 
 [lib]
     name = "wb_cache"
@@ -53,7 +53,7 @@
     strum                              = { version = "0.27", features = ["derive"], optional = true }
     tempfile                           = { version = "3.19", optional = true }
     thiserror                          = "2.0"
-    tokio                              = { version = "1.44", features = ["rt-multi-thread", "macros", "time", "sync"] }
+    tokio                              = { version = "1.44", features = ["rt-multi-thread", "macros", "time", "sync", "process", "signal"] }
     tokio-stream                       = { version = "0.1", default-features = false }
     tracing                            = { version = "0.1", features = ["std", "attributes"] }
     tracing-loki                       = { version = "0.2", optional = true }

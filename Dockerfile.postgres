@@ -1,0 +1,26 @@
+FROM postgres:17 AS simulation-postgres
+RUN apt-get update && \
+    apt-get install -y iproute2 openssh-server && \
+    rm -rf /var/lib/apt/lists/*
+
+EXPOSE 22
+
+RUN mkdir -p /var/run/sshd
+RUN mkdir -p /usr/local/libexec/simulation-postgres
+RUN echo "root:cigIbUjmotgemByp" | chpasswd
+
+# Generate pg_down script to gracefully stop PostgreSQL. We avoid dependency on the installation path of pg_ctl because
+# it is typically installed in a versioned directory, such as /usr/lib/postgresql/17/bin/pg_ctl, which isn’t available
+# in the PATH for SSH sessions. Therefore, we use `which pg_ctl` to locate the correct path.
+RUN <<EOS
+echo "#!/usr/bin/env bash" >/bin/pg_down
+echo "su - postgres /bin/sh -c '$(which pg_ctl) -D /var/lib/postgresql/data stop'" >>/bin/pg_down
+chmod +x /bin/pg_down
+EOS
+
+COPY ./docker/scripts/simulation-postgres/* /usr/local/libexec/simulation-postgres/
+COPY ./docker/etc/sshd_config /etc/ssh/sshd_config
+
+RUN chmod +x /usr/local/libexec/simulation-postgres/*
+
+ENTRYPOINT ["/usr/local/libexec/simulation-postgres/init.sh"]

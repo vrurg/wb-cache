@@ -1,0 +1,6 @@
+Host postgres
+    StrictHostKeyChecking accept-new
+    PasswordAuthentication yes
+    PubkeyAuthentication no
+    PreferredAuthentications password
+    User root

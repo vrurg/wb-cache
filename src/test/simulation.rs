@@ -103,6 +103,8 @@ use progress::PStyle;
 use types::simerr;
 use types::SimErrorAny;
 
+use crate::test::simulation::sim_app::ActorStatus;
+
 pub trait SimulationApp: Debug + Sync + Send + 'static {
     fn acquire_progress<'a>(
         &'a self,
@@ -113,11 +115,12 @@ pub trait SimulationApp: Debug + Sync + Send + 'static {
     fn app_is_gone() -> SimErrorAny {
         simerr!("App is gone")
     }
-    fn set_cached_per_sec(&self, step: f64);
-    fn set_plain_per_sec(&self, step: f64);
+    fn set_cached_status(&self, status: ActorStatus);
+    fn set_plain_status(&self, status: ActorStatus);
 
     fn report_debug<S: ToString>(&self, msg: S);
     fn report_info<S: ToString>(&self, msg: S);
+    #[allow(unused)]
     fn report_warn<S: ToString>(&self, msg: S);
     fn report_error<S: ToString>(&self, msg: S);
 }

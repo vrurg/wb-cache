@@ -25,6 +25,7 @@ use sea_orm::query::*;
 use sea_orm::EntityTrait;
 use sea_orm::QueryOrder;
 use sea_orm_migration::MigratorTrait;
+use tokio::signal;
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
@@ -56,6 +57,19 @@ use super::types::SimErrorAny;
 use super::SimulationApp;
 
 const INNER_ZIP_NAME: &str = "__script.postcard";
+
+#[allow(unused)]
+#[derive(Default, Debug, Clone, Copy)]
+pub struct ActorStatus {
+    per_sec: f64,
+    step:    usize,
+}
+
+impl ActorStatus {
+    pub fn new(per_sec: f64, step: usize) -> Self {
+        Self { per_sec, step }
+    }
+}
 
 #[derive(Debug, Clone, clap::Parser, Validate)]
 #[fxstruct(no_new, get(copy))]
@@ -143,83 +157,66 @@ pub(crate) struct Cli {
     #[fieldx(get(attributes_fn(allow(unused))))]
     test: bool,
 
-    #[cfg_attr(feature = "sqlite", clap(long, env = "WBCACHE_SQLITE", default_value_t = false))]
-    #[fieldx(get(copy, attributes_fn(cfg(feature = "sqlite"))))]
-    #[cfg(feature = "sqlite")]
-    #[garde(skip)]
+    #[clap(long, env = "WBCACHE_SQLITE", default_value_t = false)]
+    #[fieldx(get(copy))]
+    #[garde(custom(Self::feature_or_container(cfg!(feature = "sqlite"), "sqlite", &self.container)))]
     /// Use SQLite as the database backend.
     sqlite: bool,
 
     /// Path to the directory where the SQLite database is stored.
     /// If not provided, a temporary directory will be used.
-    #[cfg_attr(feature = "sqlite", clap(long, env = "WBCACHE_SQLITE_PATH"))]
-    #[fieldx(get(clone, attributes_fn(cfg(feature = "sqlite"))))]
-    #[cfg(feature = "sqlite")]
+    #[clap(long, env = "WBCACHE_SQLITE_PATH")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
     sqlite_path: Option<PathBuf>,
 
-    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG", default_value_t = false))]
-    #[fieldx(get(copy, attributes_fn(cfg(feature = "pg"))))]
-    #[garde(skip)]
-    #[cfg(feature = "pg")]
     /// Use PostgreSQL as the database backend.
+    #[clap(long, env = "WBCACHE_PG", default_value_t = false)]
+    #[fieldx(get(copy))]
+    #[garde(custom(Self::feature_or_container(cfg!(feature = "pg"), "pg", &self.container)))]
     pg: bool,
 
-    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG_HOST", default_value = "localhost"))]
-    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[clap(long, env = "WBCACHE_PG_HOST", default_value = "localhost")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
-    #[cfg(feature = "pg")]
     pg_host: String,
 
-    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG_PORT", default_value_t = 5432))]
-    #[fieldx(get(copy, attributes_fn(cfg(feature = "pg"))))]
+    #[clap(long, env = "WBCACHE_PG_PORT", default_value_t = 5432)]
+    #[fieldx(get(copy))]
     #[garde(skip)]
-    #[cfg(feature = "pg")]
     pg_port: u16,
 
-    #[cfg_attr(feature = "pg", clap(long, env = "WBCACHE_PG_USER", default_value = "wbcache"))]
-    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[clap(long, env = "WBCACHE_PG_USER", default_value = "wbcache")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
-    #[cfg(feature = "pg")]
     pg_user: String,
 
-    #[cfg_attr(
-        feature = "pg",
-        clap(long, env = "WBCACHE_PG_PASSWORD", hide_env_values = true, default_value = "wbcache")
-    )]
-    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[clap(long, env = "WBCACHE_PG_PASSWORD", hide_env_values = true, default_value = "wbcache")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
-    #[cfg(feature = "pg")]
     pg_password: String,
 
-    #[cfg_attr(
-        feature = "pg",
-        clap(long, env = "WBCACHE_PG_DB_PREFIX", default_value = "wbcache_test")
-    )]
-    #[fieldx(get(clone, attributes_fn(cfg(feature = "pg"))))]
+    #[clap(long, env = "WBCACHE_PG_DB_PREFIX", default_value = "wbcache_test")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
-    #[cfg(feature = "pg")]
     pg_db_prefix: String,
 
     /// File to send log into
-    #[cfg_attr(feature = "log", clap(long, env = "WBCACHE_LOG_FILE"))]
-    #[fieldx(get(clone, attributes_fn(cfg(feature = "log"), allow(unused))))]
+    #[clap(long, env = "WBCACHE_LOG_FILE")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
-    #[cfg(feature = "log")]
     log_file: Option<PathBuf>,
 
     /// URL of the Loki server for tracing.
-    #[cfg_attr(
-        all(feature = "tracing", feature = "tracing-loki"),
-        clap(long, env = "WBCACHE_LOKI_URL", default_value = "https://127.0.0.1:3100")
-    )]
-    #[fieldx(get(
-        clone,
-        attributes_fn(cfg(all(feature = "tracing", feature = "tracing-loki")), allow(unused))
-    ))]
+    #[clap(long, env = "WBCACHE_LOKI_URL", default_value = "https://127.0.0.1:3100")]
+    #[fieldx(get(clone))]
     #[garde(skip)]
-    #[cfg(all(feature = "tracing", feature = "tracing-loki"))]
-    loki_url: tracing_loki::url::Url,
+    loki_url: String,
+
+    #[fieldx(get(copy))]
+    #[clap(long)]
+    #[garde(skip)]
+    container: bool,
 }
 
 impl Cli {
@@ -242,11 +239,28 @@ impl Cli {
 
     fn with_file<'a>(file: &'a Option<PathBuf>) -> impl FnOnce(&'a bool, &()) -> garde::Result {
         move |value, _| {
-            if *value && file.is_none() {
-                Err(garde::Error::new("Script file name is required"))
+            if !*value || file.is_some() {
+                Ok(())
             }
             else {
+                Err(garde::Error::new("Script file name is required"))
+            }
+        }
+    }
+
+    fn feature_or_container<'a>(
+        feature_enabled: bool,
+        feature: &'static str,
+        container: &'a bool,
+    ) -> impl FnOnce(&'a bool, &()) -> garde::Result {
+        move |value, _| {
+            if !*value || *container || feature_enabled {
                 Ok(())
+            }
+            else {
+                Err(garde::Error::new(format!(
+                    "Build feature '{feature}' must be enabled or --container must be set."
+                )))
             }
         }
     }
@@ -275,28 +289,28 @@ pub struct EcommerceApp {
     #[fieldx(lazy, private, get(attributes_fn(allow(unused))), fallible)]
     tempdir: tempfile::TempDir,
 
-    #[fieldx(lazy, fallible, get, clearer)]
-    progress_ui: ProgressUI,
+    #[fieldx(lazy, fallible, get(clone), clearer)]
+    progress_ui: Arc<ProgressUI>,
 
     // This field is only used when either sqlite or pg features are enabled.
     #[fieldx(
         lock,
         private,
         get(copy, attributes_fn(allow(unused))),
-        set("_set_plain_per_sec"),
-        default(0.0)
+        set("_set_plain_status"),
+        builder(off)
     )]
-    plain_per_sec: f64,
+    plain_status: ActorStatus,
 
     // This field is only used when either sqlite or pg features are enabled.
     #[fieldx(
         lock,
         private,
         get(copy, attributes_fn(allow(unused))),
-        set("_set_cached_per_sec"),
-        default(0.0)
+        set("_set_cached_status"),
+        builder(off)
     )]
-    cached_per_sec: f64,
+    cached_status: ActorStatus,
 }
 
 impl EcommerceApp {
@@ -329,7 +343,7 @@ impl EcommerceApp {
         Ok(tempfile::Builder::new().prefix("wb-cache-simulation").tempdir()?)
     }
 
-    fn build_progress_ui(&self) -> Result<ProgressUI, SimErrorAny> {
+    fn build_progress_ui(&self) -> Result<Arc<ProgressUI>, SimErrorAny> {
         Ok(ProgressUI::builder().quiet(self.cli()?.quiet()).build()?)
     }
 
@@ -485,24 +499,48 @@ impl EcommerceApp {
         let mut tasks = JoinSet::<Result<(&'static str, Duration), SimError>>::new();
 
         let myself = self.myself().unwrap();
+        let total_steps = screenplay.len();
+        let progress_ui = self.progress_ui()?;
         let progress_task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            let user_attended = progress_ui.user_attended();
+            let mut interval = tokio::time::interval(Duration::from_millis(if user_attended { 100 } else { 1000 }));
+
             loop {
                 interval.tick().await;
 
-                let rate = if myself.plain_per_sec() > 0.0 {
-                    myself.cached_per_sec() / myself.plain_per_sec()
+                let plain_status = myself.plain_status();
+                let cached_status = myself.cached_status();
+
+                let rate = if plain_status.per_sec > 0.0 {
+                    cached_status.per_sec / plain_status.per_sec
                 }
                 else {
                     0.0
                 };
 
-                message_progress.maybe_set_message(format!(
+                let mut message_parts = Vec::new();
+
+                message_parts.push(format!(
                     "{rate:.2}x | Average: cached {:.2}/s, plain {:.2}/s",
-                    myself.cached_per_sec(),
-                    myself.plain_per_sec()
+                    cached_status.per_sec, plain_status.per_sec,
                 ));
-                message_progress.maybe_inc(1);
+
+                if !user_attended {
+                    message_parts.push(format!(
+                        "Steps: cached {:.2}%, plain {:.2}%",
+                        (cached_status.step as f32 / total_steps as f32) * 100.0,
+                        (plain_status.step as f32 / total_steps as f32) * 100.0
+                    ));
+                }
+
+                let message_line = message_parts.join(" | ");
+                if user_attended {
+                    message_progress.maybe_set_message(message_line);
+                    message_progress.maybe_inc(1);
+                }
+                else if !progress_ui.quiet() {
+                    progress_ui.report_info(message_line);
+                }
             }
         });
 
@@ -602,13 +640,13 @@ impl EcommerceApp {
 
             let summary = format!(
                 "*** {} ***\nWith driver: {}\n{}\n",
-                chrono::Local::now(),
+                chrono::Local::now().naive_local(),
                 driver_name,
                 table
             );
 
             if let Some(stats_output) = cli.output() {
-                let mut file = BufWriter::new(std::fs::File::options().append(true).create(true).open(&stats_output)?);
+                let mut file = BufWriter::new(std::fs::File::options().create(true).append(true).open(&stats_output)?);
                 write!(file, "\n{summary}")?;
             }
 
@@ -658,9 +696,9 @@ impl EcommerceApp {
             .with_style(ProgressStyle::default_spinner().template("[{binary_bytes:.yellow}] {msg}")?);
 
         pb.wrap_read(zip_file).read_exact(&mut buf[..size as usize])?;
-        pb.set_message("Script file loaded successfully.");
+        self.report_info(format!("Script file '{}' loaded successfully.", script_file.display()));
         let script: Vec<Step> = postcard::from_bytes(&buf)?;
-        pb.finish_with_message("Script extracted successfully.");
+        self.report_info("Script extracted successfully.");
 
         Ok(script)
     }
@@ -684,13 +722,20 @@ impl EcommerceApp {
 
         #[cfg(feature = "sqlite")]
         if cli.sqlite() {
-            let db_plain = Sqlite::connect(&self.db_dir()?, "test_company_plan.db").await?;
+            let db_plain = Sqlite::connect(&self.db_dir()?, "test_company_plain.db").await?;
             let db_cached = Sqlite::connect(&self.db_dir()?, "test_company_cached.db").await?;
             performed = true;
             self.execute_script(db_plain, db_cached, script.clone()).await?;
         }
         else {
             drivers.push("--sqlite");
+        }
+
+        #[cfg(not(feature = "sqlite"))]
+        if cli.sqlite() {
+            return Err(simerr!(
+                "SQLite support is not enabled. Use `cargo run --feature sqlite ...` to enable it or try with --container."
+            ));
         }
 
         #[cfg(feature = "pg")]
@@ -716,6 +761,13 @@ impl EcommerceApp {
         }
         else {
             drivers.push("--pg");
+        }
+
+        #[cfg(not(feature = "pg"))]
+        if cli.pg() {
+            return Err(simerr!(
+                "PostgreSQL support is not enabled. Use `cargo run --feature pg ...` to enable it or try with --container."
+            ));
         }
 
         if !performed {
@@ -958,6 +1010,10 @@ impl EcommerceApp {
 
         self.validate()?;
 
+        if cli.container() {
+            return self.run_container().await;
+        }
+
         #[cfg(feature = "tracing")]
         self.setup_tracing()?;
 
@@ -978,6 +1034,92 @@ impl EcommerceApp {
             };
 
             self.execute_per_db(script).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn run_container(&self) -> Result<(), SimErrorAny> {
+        let cli = self.cli()?;
+
+        let mut cmd = tokio::process::Command::new("docker");
+
+        let mut profiles = Vec::new();
+
+        if let Some(script) = cli.script() {
+            cmd.env("WBCACHE_SCRIPT", script);
+        }
+
+        if let Some(output) = cli.output() {
+            cmd.env("WBCACHE_OUTPUT", output);
+        }
+
+        cmd.env("WBCACHE_QUIET", cli.quiet().to_string())
+            .env("WBCACHE_PERIOD", cli.period().to_string())
+            .env("WBCACHE_PRODUCTS", cli.products().to_string())
+            .env("WBCACHE_INITIAL_CUSTOMERS", cli.initial_customers().to_string())
+            .env("WBCACHE_MARKET_CAPACITY", cli.market_capacity().to_string())
+            .env("WBCACHE_INFLECTION_POINT", cli.inflection_point().to_string())
+            .env("WBCACHE_GROWTH_RATE", cli.growth_rate().to_string())
+            .env("WBCACHE_MIN_CUSTOMER_ORDERS", cli.min_customer_orders().to_string())
+            .env("WBCACHE_MAX_CUSTOMER_ORDERS", cli.max_customer_orders().to_string())
+            .env("WBCACHE_RETURN_WINDOW", cli.return_window().to_string())
+            .env("WBCACHE_SAVE", cli.save().to_string())
+            .env("WBCACHE_LOAD", cli.load().to_string())
+            .env("WBCACHE_TEST", cli.test().to_string())
+            .env("WBCACHE_SQLITE", cli.sqlite().to_string())
+            .env("WBCACHE_PG", cli.pg().to_string())
+            .env("WBCACHE_PG_HOST", cli.pg_host())
+            .env("WBCACHE_PG_PORT", cli.pg_port().to_string())
+            .env("WBCACHE_PG_USER", cli.pg_user())
+            .env("WBCACHE_PG_PASSWORD", cli.pg_password())
+            .env("WBCACHE_PG_DB_PREFIX", cli.pg_db_prefix())
+            .env("WBCACHE_LOKI_URL", cli.loki_url().to_string());
+
+        if cli.sqlite() {
+            profiles.push("sqlite");
+        }
+
+        if let Some(sqlite_path) = cli.sqlite_path() {
+            cmd.env("WBCACHE_SQLITE_PATH", sqlite_path);
+        }
+
+        if cli.pg() {
+            profiles.push("pg");
+        }
+
+        if let Some(log_file) = cli.log_file() {
+            cmd.env("WBCACHE_LOG_FILE", log_file);
+        }
+
+        cmd.arg("compose");
+
+        for profile in profiles {
+            cmd.arg("--profile").arg(profile);
+        }
+
+        cmd.arg("up").arg("--build");
+
+        let mut child = cmd.kill_on_drop(true).spawn()?;
+
+        let mut kill_count = 0;
+
+        while kill_count < 3 {
+            tokio::select!(
+                status = child.wait() => {
+                    if let Err(e) = status {
+                        let err = SimErrorAny::from(e);
+                        err.context("Failed to wait for the container process");
+                        return Err(err);
+                    }
+                    break;
+                },
+                _ = signal::ctrl_c() => {
+                    println!("Received Ctrl+C, stopping the container...");
+                    let _ = child.kill().await;
+                    kill_count += 1;
+                }
+            );
         }
 
         Ok(())
@@ -1009,12 +1151,12 @@ impl SimulationApp for EcommerceApp {
         Ok(self.progress_ui()?.acquire_progress(style, order))
     }
 
-    fn set_cached_per_sec(&self, step: f64) {
-        self._set_cached_per_sec(step);
+    fn set_cached_status(&self, status: ActorStatus) {
+        self._set_cached_status(status);
     }
 
-    fn set_plain_per_sec(&self, step: f64) {
-        self._set_plain_per_sec(step);
+    fn set_plain_status(&self, status: ActorStatus) {
+        self._set_plain_status(status);
     }
 
     fn report_info<S: ToString>(&self, msg: S) {

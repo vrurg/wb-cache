@@ -12,7 +12,9 @@ if [ "$CARGO_MAKE_TASK" != "publish" ]; then
     exit 1
 fi
 ''']
-pre-release-replacements = []
+pre-release-replacements = [
+    { file = ".env", search = "APP_VERSION\\s*=\\s*.*", replace = "APP_VERSION={{version}}", prerelease = true },
+]
 publish = true
 push = true
 push-options = []

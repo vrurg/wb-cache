@@ -1,0 +1,110 @@
+name: wbcache-company-simulation
+
+x-pg-env:
+  environment: &pg-env
+    WBCACHE_PG_HOST: postgres
+    WBCACHE_PG_PORT: 5432
+    WBCACHE_PG_USER: wbcache
+    WBCACHE_PG_PASSWORD: wbcache
+    WBCACHE_PG_DB_PREFIX: wbcache_test
+
+x-sqlite-env:
+  environment: &sqlite-env
+    WBCACHE_SQLITE_PATH: .
+
+x-company-env:
+  environment: &company-env
+    WBCACHE_CLEAR_TARGET: ${WBCACHE_CLEAR_TARGET:-false}
+    WBCACHE_OUTPUT: ${WBCACHE_OUTPUT:-company-simulation.stats}
+    WBCACHE_QUIET: ${WBCACHE_QUIET:-false}
+    WBCACHE_PERIOD: ${WBCACHE_PERIOD:-365}
+    WBCACHE_PRODUCTS: ${WBCACHE_PRODUCTS:-10}
+    WBCACHE_INITIAL_CUSTOMERS: ${WBCACHE_INITIAL_CUSTOMERS:-1}
+    WBCACHE_MARKET_CAPACITY: ${WBCACHE_MARKET_CAPACITY:-500}
+    WBCACHE_INFLECTION_POINT: ${WBCACHE_INFLECTION_POINT:-200}
+    WBCACHE_GROWTH_RATE: ${WBCACHE_GROWTH_RATE:-0.05}
+    WBCACHE_MIN_CUSTOMER_ORDERS: ${WBCACHE_MIN_CUSTOMER_ORDERS:-0.15}
+    WBCACHE_MAX_CUSTOMER_ORDERS: ${WBCACHE_MAX_CUSTOMER_ORDERS:-3.0}
+    WBCACHE_RETURN_WINDOW: ${WBCACHE_RETURN_WINDOW:-30}
+    WBCACHE_SCRIPT_FILE: ${WBCACHE_SCRIPT_FILE:-simulation_script.bin}
+    WBCACHE_SAVE_SCRIPT: ${WBCACHE_SAVE_SCRIPT:-false}
+    WBCACHE_LOAD_SCRIPT: ${WBCACHE_LOAD_SCRIPT:-false}
+    WBCACHE_TEST: ${WBCACHE_TEST:-true}
+    WBCACHE_LOKI_URL: ${WBCACHE_LOKI_URL:-https://127.0.0.1:3100}
+
+x-company-simulation: &company-base
+  volumes:
+    - wbcache-data:/wbcache
+  post_start:
+    - command: chown -R wbcache /wbcache
+      user: root
+    - command: chmod -R 755 /wbcache
+      user: root
+  networks:
+    - backend
+
+services:
+  company-simulation-pg:
+    <<: *company-base
+    profiles: [ "pg" ]
+    build:
+      context: .
+      target: runtime-pg
+      args:
+        - WBCACHE_FEATURES=pg
+    image: runtime-pg
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    environment:
+      <<: [ *company-env, *pg-env ]
+
+  company-simulation-sqlite:
+    <<: *company-base
+    profiles: [ "sqlite" ]
+    build:
+      context: .
+      target: runtime-sqlite
+      args:
+        - WBCACHE_FEATURES=sqlite
+    image: runtime-sqlite
+    environment:
+      <<: [ *company-env, *sqlite-env ]
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: simulation-postgres
+    environment:
+      <<: *pg-env
+      POSTGRES_USER: wbcache
+      POSTGRES_PASSWORD: wbcache
+      POSTGRES_DB: wbcache
+      WBCACHE_PG_NET_DELAY: ${WBCACHE_PG_NET_DELAY:-2ms}
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    ports:
+      - "5432:5432"
+    volumes:
+      - wbcache-postgres:/var/lib/postgresql/data:rw
+      - ./docker/scripts/pg-entrypoint-init/:/docker-entrypoint-initdb.d:rw
+    profiles: [ "pg" ]
+    networks:
+      - backend
+
+volumes:
+  wbcache-data: {}
+  wbcache-postgres: {}
+
+networks:
+  backend:
+    driver: bridge
+    internal: true

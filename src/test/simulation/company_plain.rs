@@ -9,6 +9,8 @@ use sea_orm::prelude::*;
 use sea_orm::ActiveValue::Set;
 use sea_orm::IntoActiveModel;
 
+use crate::test::simulation::sim_app::ActorStatus;
+
 use super::actor::TestActor;
 use super::db::cache::DBProvider;
 use super::db::driver::DatabaseDriver;
@@ -290,7 +292,8 @@ where
 
     async fn step_complete(&self, _db: &DatabaseConnection, step_num: usize) -> Result<(), SimError> {
         let elapsed = self.started().elapsed().as_secs_f64();
-        self.app()?.set_plain_per_sec(step_num as f64 / elapsed);
+        self.app()?
+            .set_plain_status(ActorStatus::new(step_num as f64 / elapsed, step_num));
         Ok(())
     }
 }
