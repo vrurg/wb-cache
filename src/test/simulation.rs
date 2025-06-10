@@ -60,7 +60,12 @@
 //!
 //! # Running the Simulation
 //!
-//! To run the simulation, execute one of the following commands:
+//! The simulation can be run in two ways: directly or in a Docker container. The latter is recommended for when there
+//! is no PostgreSQL server available and you don't want to set it up manually.
+//!
+//! ## Direct Run
+//!
+//! To run the simulation directly execute one of the following commands:
 //!
 //! ```shell
 //! cargo run --profile release --feature sqlite --example company -- --sqlite --test
@@ -72,7 +77,8 @@
 //! cargo run --profile release --features pg --example company -- --pg --test
 //! ```
 //!
-//! _**Note:** The release profile is optional but speeds up the caching code, yielding better benchmarking results._
+//! _**Note:** The release profile is optional, but it speeds up the caching code, yielding better benchmarking
+//! results._
 //!
 //! Running with the PostgreSQL driver requires connection parameters to be provided. This can be done either via the
 //! command line or environment variables. To see the available options, run:
@@ -85,6 +91,23 @@
 //!
 //! ```shell
 //! cargo run --all-features --example company -- --help
+//! ```
+//!
+//! ## Containerized Run
+//!
+//! The simplest way to run the simulation in a container is to add `--container` to the command line:
+//!
+//! ```shell
+//! cargo run --example company -- --pg --sqlite --test --container
+//! ```
+//!
+//! Any additional command line arguments will be passed to the containerized application:
+//!
+//! ```shell
+//! # Do very short test
+//! cargo run --example company -- \
+//!     --pg --sqlite --container --test \
+//!     --market-capacity 100 --inflection-point 40 --period 90
 //! ```
 pub mod actor;
 pub mod company_cached;

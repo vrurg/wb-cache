@@ -1074,7 +1074,7 @@ impl EcommerceApp {
             .env("WBCACHE_PG_USER", cli.pg_user())
             .env("WBCACHE_PG_PASSWORD", cli.pg_password())
             .env("WBCACHE_PG_DB_PREFIX", cli.pg_db_prefix())
-            .env("WBCACHE_LOKI_URL", cli.loki_url().to_string());
+            .env("WBCACHE_LOKI_URL", cli.loki_url());
 
         if cli.sqlite() {
             profiles.push("sqlite");
