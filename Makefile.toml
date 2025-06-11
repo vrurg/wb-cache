@@ -7,7 +7,7 @@ extend = "build-tools/std-makefile.toml"
     __MAKE_README_CRATE_ROOT__   = "."                         # In a workspace – a crate directory
     __MAKE_TEST_FIXED_FEATURES__ = "simulation,sqlite,pg"
     __MAKE_TEST_TASKS__          = "test-default test-docs-rs"
-    __MAKE_TOOLCHAINS__          = "1.82 stable beta nightly"
+    __MAKE_TOOLCHAINS__          = "1.85 stable beta nightly"
 
 [config]
     default_to_workspace = false

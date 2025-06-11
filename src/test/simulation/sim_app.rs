@@ -908,7 +908,9 @@ impl EcommerceApp {
     {
         use std::process;
 
-        let url = self.cli()?.loki_url();
+        use tracing_loki::url::Url;
+
+        let url = Url::parse(&self.cli()?.loki_url())?;
 
         let (loki, loki_task) = tracing_loki::builder()
             .label("app", "wb_cache::company")?

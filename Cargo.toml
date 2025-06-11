@@ -9,7 +9,7 @@
     license-file  = "LICENSE"
     name          = "wb-cache"
     repository    = "https://github.com/vrurg/wb-cache.git"
-    rust-version  = "1.82"
+    rust-version  = "1.85"
     version       = "0.1.1-beta.1"
 
 [lib]
